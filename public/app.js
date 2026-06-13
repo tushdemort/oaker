@@ -570,7 +570,7 @@ async function summarizeResearchTurn(prompt, turn, priorNotes, model, signal) {
   const sourceBlocks = turn.sites
     .map((site) => `[[${site.citationId}]] ${site.title}\nURL: ${site.url}\nSnippet: ${site.snippet || "No snippet"}\nExtract:\n${(site.text || site.error || "").slice(0, 5500)}`)
     .join("\n\n");
-  const prior = priorNotes.map((note) => `Turn ${note.turn}: ${note.summary}`).join("\n\n") || "None yet.";
+  const prior = priorNotes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n") || "None yet.";
 
   return askModelOnce(
     model,
@@ -578,7 +578,7 @@ async function summarizeResearchTurn(prompt, turn, priorNotes, model, signal) {
       ...getResearchBaseMessages(),
       {
         role: "user",
-        content: `Research question: ${prompt}\n\nPrior turn notes:\n${prior}\n\nCurrent turn ${turn.number} search query: ${turn.query}\n\nWebsite material:\n${sourceBlocks}\n\nWrite detailed research notes for this turn. Use citations like [[1]] immediately after claims. Identify contradictions, missing evidence, and promising follow-up angles.`
+        content: `Research question: ${prompt}\n\nPrior turn notes:\n${prior}\n\nCurrent turn ${turn.number} search query: ${turn.query}\n\nWebsite material:\n${sourceBlocks}\n\nWrite disciplined research notes for this turn in the style of a meticulous client advisory analyst. Use only the supplied material for web facts. Structure the notes as: Key findings, Evidence quality, Contradictions or tension, Implications, Open questions, and Follow-up search angles. Use citations like [[1]] after evidence-backed claims. Make the follow-up angles depend on what was found in this turn and earlier turns, not just on the original prompt.`
       }
     ],
     signal
@@ -592,7 +592,7 @@ async function chooseNextResearchQuery(prompt, notes, turnNumber, model, signal)
       ...getResearchBaseMessages(),
       {
         role: "user",
-        content: `Research question: ${prompt}\n\nCompleted notes:\n${notes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n")}\n\nDecide whether another research turn is needed. Use another turn only if it would materially improve the report. Return only JSON in this exact shape:\n{"status":"continue","nextQuery":"specific web search query"}\nor\n{"status":"complete","nextQuery":""}\n\nMinimum turns: ${DEEP_RESEARCH_MIN_TURNS}. Current turns completed: ${turnNumber}.`
+        content: `Research question: ${prompt}\n\nCompleted notes from all prior turns:\n${notes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n")}\n\nChoose the next research turn like a meticulous analyst planning the next interview or diligence workstream. The next query must be based on the strongest gaps, contradictions, missing numbers, source-quality issues, or unexpected findings from the completed notes. Avoid repeating the original question unless the prior evidence shows that it needs a narrower version. Use another turn only if it would materially improve the final client report.\n\nReturn only JSON in this exact shape:\n{"status":"continue","nextQuery":"specific web search query","rationale":"why this query follows from prior findings"}\nor\n{"status":"complete","nextQuery":"","rationale":"why enough evidence has been gathered"}\n\nMinimum turns: ${DEEP_RESEARCH_MIN_TURNS}. Current turns completed: ${turnNumber}.`
       }
     ],
     signal
@@ -600,7 +600,7 @@ async function chooseNextResearchQuery(prompt, notes, turnNumber, model, signal)
 
   const parsed = parseJsonObject(decision);
   if (turnNumber < DEEP_RESEARCH_MIN_TURNS && !parsed?.nextQuery) {
-    return `${prompt} evidence analysis background`;
+    return buildFallbackResearchQuery(prompt, notes);
   }
 
   if (parsed?.status === "continue" && parsed.nextQuery) {
@@ -610,6 +610,65 @@ async function chooseNextResearchQuery(prompt, notes, turnNumber, model, signal)
   return "";
 }
 
+function buildFallbackResearchQuery(prompt, notes) {
+  const focusTerms = extractResearchFocusTerms(notes.map((note) => note.summary).join(" "));
+  return [prompt, focusTerms, "evidence gaps source comparison"]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+}
+
+function extractResearchFocusTerms(text) {
+  const stopWords = new Set([
+    "about",
+    "after",
+    "again",
+    "based",
+    "because",
+    "between",
+    "claim",
+    "claims",
+    "could",
+    "evidence",
+    "finding",
+    "findings",
+    "follow",
+    "however",
+    "including",
+    "notes",
+    "questions",
+    "research",
+    "should",
+    "source",
+    "sources",
+    "their",
+    "there",
+    "these",
+    "turn",
+    "using",
+    "which",
+    "would"
+  ]);
+  const words = String(text || "")
+    .toLowerCase()
+    .replace(/\[\[\d+\]\]/g, " ")
+    .match(/\b[a-z][a-z0-9-]{4,}\b/g) || [];
+  const counts = new Map();
+
+  for (const word of words) {
+    if (stopWords.has(word)) continue;
+    counts.set(word, (counts.get(word) || 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([word]) => word)
+    .join(" ");
+}
+
 async function writeResearchReport(prompt, notes, sources, model, signal) {
   return askModelOnce(
     model,
@@ -617,7 +676,7 @@ async function writeResearchReport(prompt, notes, sources, model, signal) {
       ...getResearchBaseMessages(),
       {
         role: "user",
-        content: `Research question: ${prompt}\n\nTurn notes:\n${notes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n")}\n\nSources:\n${sources.map((source) => `[[${source.citationId}]] ${source.title}\n${source.url}\n${source.snippet || ""}`).join("\n\n")}\n\nWrite an extensive, well-structured final report in Markdown. Include an executive summary, key findings, detailed analysis, open questions, and a source-grounded conclusion. Cite every factual claim that comes from web material using [[number]] immediately after the sentence. Do not invent citations.`
+        content: `Research question: ${prompt}\n\nTurn notes:\n${notes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n")}\n\nSources:\n${sources.map((source) => `[[${source.citationId}]] ${source.title}\n${source.url}\n${source.snippet || ""}`).join("\n\n")}\n\nWrite an extensive, client-ready research report in Markdown with the discipline of a senior strategy consultant. The tone and structure should fit the subject matter: use an investor memo style for markets, policy brief style for regulation, technical diligence style for engineering topics, or executive advisory style for general business topics. Include a concise title, executive summary, key findings, evidence assessment, detailed analysis, implications, risks or unknowns, recommendations or next steps when appropriate, and a source-grounded conclusion. Use tables when they make comparisons clearer. Use citations like [[number]] as clean endnote markers for evidence-backed claims, but do not overload every sentence. Do not invent citations or facts.`
       }
     ],
     signal
@@ -653,7 +712,7 @@ function getResearchBaseMessages() {
   const messages = [
     {
       role: "system",
-      content: "You are a careful deep research assistant. Use provided web excerpts only for web facts, cite claims with the supplied citation IDs, and explicitly preserve uncertainty."
+      content: "You are a meticulous deep research analyst. Use provided web excerpts only for web facts, make later research turns depend on earlier findings, cite claims with supplied citation IDs, assess source quality, preserve uncertainty, and produce client-ready analysis rather than generic summaries."
     }
   ];
 
@@ -691,49 +750,525 @@ function collectResearchSources(research) {
 }
 
 function buildResearchReportHtml(prompt, reportMarkdown, sources) {
+  const report = prepareResearchReport(prompt, reportMarkdown);
+  const theme = getResearchReportTheme(prompt, reportMarkdown);
   const sourceList = sources
-    .map((source) => `<li id="source-${source.citationId}"><a href="${escapeAttribute(source.url)}" target="_blank" rel="noreferrer">[${source.citationId}] ${escapeHtml(source.title || source.url)}</a><p>${escapeHtml(source.snippet || "")}</p></li>`)
+    .map((source) => `<li id="source-${source.citationId}">
+      <div class="source-number">${source.citationId}</div>
+      <div>
+        <a href="${escapeAttribute(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.title || source.url)}</a>
+        <p>${escapeHtml(source.snippet || getSourceHost(source.url) || source.url)}</p>
+      </div>
+    </li>`)
     .join("");
+  const sourceCount = sources.length === 1 ? "1 source" : `${sources.length} sources`;
+  const generatedAt = new Date().toLocaleString();
+  const styleVars = `--report-ink: ${theme.ink}; --report-muted: ${theme.muted}; --report-line: ${theme.line}; --report-paper: ${theme.paper}; --report-wash: ${theme.wash}; --report-panel: ${theme.panel}; --report-accent: ${theme.accent}; --report-accent-soft: ${theme.accentSoft};`;
 
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapeHtml(`Deep research report: ${prompt}`)}</title>
+  <title>${escapeHtml(report.title)}</title>
   <style>
-    :root { color-scheme: light; --ink: #25221f; --muted: #6f675d; --line: #ddd4c8; --bg: #f7f3eb; --panel: #fffdf8; --accent: #344f43; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; }
-    main { width: min(920px, calc(100% - 36px)); margin: 0 auto; padding: 48px 0 72px; }
-    header { margin-bottom: 34px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
-    h1 { margin: 0; max-width: 780px; font-family: Georgia, "Times New Roman", serif; font-size: clamp(2.2rem, 6vw, 4.5rem); line-height: 1; letter-spacing: 0; }
-    .meta { margin-top: 12px; color: var(--muted); }
-    article { padding: 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 18px 50px rgba(37, 34, 31, 0.08); }
-    h2, h3 { line-height: 1.2; }
-    code { padding: 0.1em 0.3em; background: rgba(52, 79, 67, 0.1); border-radius: 5px; }
-    pre { overflow: auto; padding: 14px; color: #fffaf3; background: #252a28; border-radius: 8px; }
-    .citation-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; margin: 0 2px; padding: 2px 8px 2px 3px; color: var(--muted); background: rgba(52, 79, 67, 0.1); border-radius: 999px; font-size: 0.78rem; font-weight: 750; line-height: 1.6; text-decoration: none; vertical-align: 0.08em; white-space: nowrap; }
-    .citation-icon { display: grid; place-items: center; width: 18px; height: 18px; flex: 0 0 auto; color: #fff; background: var(--accent); border-radius: 999px; font-size: 0.67rem; }
-    .sources { margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--line); }
-    .sources li { margin-bottom: 12px; }
-    .sources p { margin: 4px 0 0; color: var(--muted); }
-    a { color: var(--accent); }
+    :root { color-scheme: light; ${styleVars} }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--report-ink);
+      background:
+        linear-gradient(180deg, var(--report-wash) 0, var(--report-paper) 420px),
+        var(--report-paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+    main {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 56px 0 82px;
+    }
+    .cover {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 250px;
+      gap: 44px;
+      align-items: end;
+      min-height: 300px;
+      padding: 46px;
+      color: #fff;
+      background:
+        linear-gradient(135deg, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.02)),
+        var(--report-accent);
+      border-radius: 3px;
+      box-shadow: 0 24px 70px rgba(24, 30, 36, 0.18);
+    }
+    .eyebrow {
+      margin-bottom: 18px;
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 0.74rem;
+      font-weight: 760;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      max-width: 760px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2.35rem, 6vw, 5.2rem);
+      font-weight: 500;
+      letter-spacing: 0;
+      line-height: 0.98;
+    }
+    .cover-aside {
+      display: grid;
+      gap: 16px;
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 0.9rem;
+    }
+    .meta-item {
+      padding-top: 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.22);
+    }
+    .meta-label {
+      display: block;
+      margin-bottom: 4px;
+      color: rgba(255, 255, 255, 0.48);
+      font-size: 0.7rem;
+      font-weight: 760;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .report-frame {
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr);
+      gap: 44px;
+      align-items: start;
+      margin-top: 36px;
+    }
+    .report-rail {
+      position: sticky;
+      top: 24px;
+      display: grid;
+      gap: 18px;
+      padding: 22px 0;
+      color: var(--report-muted);
+      border-top: 2px solid var(--report-accent);
+    }
+    .rail-title {
+      color: var(--report-ink);
+      font-weight: 760;
+    }
+    .rail-text {
+      margin: 0;
+      font-size: 0.92rem;
+    }
+    article {
+      min-width: 0;
+      padding: 8px 0 0;
+      font-size: 1.02rem;
+    }
+    article > *:first-child {
+      margin-top: 0;
+    }
+    h2 {
+      margin: 2.2em 0 0.65em;
+      padding-top: 0.9em;
+      color: var(--report-ink);
+      border-top: 1px solid var(--report-line);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.7rem, 3vw, 2.45rem);
+      font-weight: 520;
+      line-height: 1.1;
+    }
+    h3 {
+      margin: 1.7em 0 0.5em;
+      color: var(--report-ink);
+      font-size: 1.12rem;
+      line-height: 1.24;
+    }
+    p {
+      margin: 0 0 1.05em;
+    }
+    ul, ol {
+      padding-left: 1.35rem;
+    }
+    li {
+      margin-bottom: 0.48em;
+    }
+    blockquote {
+      margin: 1.5em 0;
+      padding: 0.8em 1.1em;
+      color: var(--report-muted);
+      background: var(--report-panel);
+      border-left: 4px solid var(--report-accent);
+    }
+    table {
+      width: 100%;
+      margin: 1.4em 0;
+      border-collapse: collapse;
+      background: #fff;
+      border: 1px solid var(--report-line);
+      font-size: 0.94rem;
+    }
+    th, td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--report-line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--report-ink);
+      background: var(--report-panel);
+      font-size: 0.76rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    code {
+      padding: 0.1em 0.3em;
+      background: var(--report-panel);
+      border-radius: 4px;
+    }
+    pre {
+      overflow: auto;
+      padding: 16px;
+      color: #fffaf3;
+      background: #20242b;
+      border-radius: 3px;
+    }
+    sup.endnote-ref {
+      margin-left: 0.1em;
+      font-size: 0.68em;
+      line-height: 0;
+    }
+    sup.endnote-ref a {
+      color: var(--report-accent);
+      text-decoration: none;
+    }
+    .sources {
+      margin-top: 58px;
+      padding-top: 30px;
+      border-top: 2px solid var(--report-accent);
+    }
+    .sources h2 {
+      margin-top: 0;
+      padding-top: 0;
+      border-top: 0;
+      font-size: 1.9rem;
+    }
+    .source-list {
+      display: grid;
+      gap: 16px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .source-list li {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 14px;
+      margin: 0;
+      padding-top: 14px;
+      border-top: 1px solid var(--report-line);
+    }
+    .source-number {
+      color: var(--report-accent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-weight: 760;
+      font-variant-numeric: tabular-nums;
+    }
+    .sources p {
+      margin: 4px 0 0;
+      color: var(--report-muted);
+      font-size: 0.9rem;
+    }
+    a {
+      color: var(--report-accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.16em;
+    }
+    @media (max-width: 840px) {
+      main { width: min(100% - 28px, 1120px); padding-top: 24px; }
+      .cover { grid-template-columns: 1fr; min-height: auto; padding: 28px; }
+      .report-frame { grid-template-columns: 1fr; gap: 18px; }
+      .report-rail { position: static; padding-bottom: 0; }
+    }
+    @media print {
+      body { background: #fff; }
+      main { width: 100%; padding: 0; }
+      .cover { box-shadow: none; border-radius: 0; }
+      .report-frame { display: block; }
+      .report-rail { display: none; }
+      a { color: inherit; }
+    }
   </style>
 </head>
 <body>
   <main>
-    <header>
-      <h1>${escapeHtml(prompt)}</h1>
-      <div class="meta">Generated by Oaker Deep Research on ${new Date().toLocaleString()}</div>
+    <header class="cover">
+      <div>
+        <div class="eyebrow">${escapeHtml(theme.label)} · Research report</div>
+        <h1>${escapeHtml(report.title)}</h1>
+      </div>
+      <aside class="cover-aside" aria-label="Report metadata">
+        <div class="meta-item"><span class="meta-label">Prepared</span>${escapeHtml(generatedAt)}</div>
+        <div class="meta-item"><span class="meta-label">Evidence base</span>${escapeHtml(sourceCount)}</div>
+        <div class="meta-item"><span class="meta-label">Subject</span>${escapeHtml(prompt)}</div>
+      </aside>
     </header>
-    <article>${renderMarkdown(reportMarkdown, sources)}</article>
+    <div class="report-frame">
+      <aside class="report-rail">
+        <div class="rail-title">Analyst note</div>
+        <p class="rail-text">Findings are synthesized from the cited source set and should be read with the evidence limits and open questions noted in the report.</p>
+      </aside>
+      <article>${renderReportMarkdown(report.bodyMarkdown)}</article>
+    </div>
     <section class="sources">
       <h2>Sources</h2>
-      <ol>${sourceList}</ol>
+      <ol class="source-list">${sourceList || '<li><div class="source-number">0</div><div>No external sources were saved for this report.</div></li>'}</ol>
     </section>
   </main>
 </body>
 </html>`;
+}
+
+function prepareResearchReport(prompt, reportMarkdown) {
+  const markdown = String(reportMarkdown || "").trim();
+  const heading = markdown.match(/^#\s+(.+?)(?:\n+|$)/);
+  const title = heading ? cleanMarkdownInline(heading[1]) : makeReportTitle(prompt);
+  const bodyMarkdown = heading ? markdown.slice(heading[0].length).trim() : markdown;
+
+  return {
+    title,
+    bodyMarkdown: bodyMarkdown || "No report body was generated."
+  };
+}
+
+function makeReportTitle(prompt) {
+  const normalized = String(prompt || "Research report").replace(/\s+/g, " ").trim();
+  if (!normalized) return "Research Report";
+  return normalized.length > 96 ? `${normalized.slice(0, 93)}...` : normalized;
+}
+
+function cleanMarkdownInline(text) {
+  return String(text || "")
+    .replace(/\[\[(\d+)\]\]|\[(\d+)\]/g, "")
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getResearchReportTheme(prompt, markdown) {
+  const haystack = `${prompt} ${markdown}`.toLowerCase();
+  const themes = {
+    technology: {
+      label: "Technology diligence",
+      ink: "#18212b",
+      muted: "#5d6975",
+      line: "#d7dee5",
+      paper: "#f7f9fb",
+      wash: "#e9eff5",
+      panel: "#eef3f7",
+      accent: "#244966",
+      accentSoft: "#dfe9f1"
+    },
+    market: {
+      label: "Market advisory",
+      ink: "#211d19",
+      muted: "#6d6258",
+      line: "#ded6ca",
+      paper: "#fbf8f2",
+      wash: "#efe7da",
+      panel: "#f4eee4",
+      accent: "#72512d",
+      accentSoft: "#eadcc9"
+    },
+    policy: {
+      label: "Policy brief",
+      ink: "#1f2424",
+      muted: "#5d6664",
+      line: "#d7dfdc",
+      paper: "#f8faf8",
+      wash: "#e8f0eb",
+      panel: "#eef4f0",
+      accent: "#2f5b4f",
+      accentSoft: "#dce9e4"
+    },
+    consumer: {
+      label: "Consumer insight",
+      ink: "#251e2a",
+      muted: "#6a6070",
+      line: "#ddd5e2",
+      paper: "#fbf8fb",
+      wash: "#efe8f2",
+      panel: "#f5eef7",
+      accent: "#5d4169",
+      accentSoft: "#eaddec"
+    },
+    neutral: {
+      label: "Executive advisory",
+      ink: "#20242a",
+      muted: "#626974",
+      line: "#d9dde2",
+      paper: "#fafafa",
+      wash: "#eceff2",
+      panel: "#f1f3f5",
+      accent: "#29384a",
+      accentSoft: "#e2e7ed"
+    }
+  };
+
+  if (/(ai|llm|software|platform|cloud|data|model|developer|api|cyber|security|chip|semiconductor|engineering|technical|ollama|local model)/.test(haystack)) {
+    return themes.technology;
+  }
+  if (/(market|revenue|growth|pricing|sales|customer|competition|competitor|business|strategy|investment|finance|margin|profit|valuation|industry)/.test(haystack)) {
+    return themes.market;
+  }
+  if (/(policy|regulation|law|legal|government|public sector|compliance|privacy|risk|governance)/.test(haystack)) {
+    return themes.policy;
+  }
+  if (/(brand|consumer|media|entertainment|show|movie|music|retail|audience|culture|product)/.test(haystack)) {
+    return themes.consumer;
+  }
+
+  return themes.neutral;
+}
+
+function renderReportMarkdown(markdown) {
+  if (!markdown) return "";
+
+  const parts = [];
+  const codeBlockPattern = /```([\w-]*)\n?([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = codeBlockPattern.exec(markdown)) !== null) {
+    parts.push(renderReportText(markdown.slice(lastIndex, match.index)));
+    parts.push(`<pre><code>${escapeHtml(match[2])}</code></pre>`);
+    lastIndex = match.index + match[0].length;
+  }
+
+  parts.push(renderReportText(markdown.slice(lastIndex)));
+  return parts.join("");
+}
+
+function renderReportText(text) {
+  const lines = String(text || "").split("\n");
+  const blocks = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = Math.min(heading[1].length + 1, 3);
+      blocks.push(`<h${level}>${renderReportInline(heading[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    if (isReportTableStart(lines, index)) {
+      const tableLines = [lines[index], lines[index + 1]];
+      index += 2;
+      while (index < lines.length && lines[index].trim() && lines[index].includes("|")) {
+        tableLines.push(lines[index]);
+        index += 1;
+      }
+      blocks.push(renderReportTable(tableLines));
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(trimmed)) {
+      const items = [];
+      while (index < lines.length && /^[-*]\s+/.test(lines[index].trim())) {
+        items.push(`<li>${renderReportInline(lines[index].trim().replace(/^[-*]\s+/, ""))}</li>`);
+        index += 1;
+      }
+      blocks.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const items = [];
+      while (index < lines.length && /^\d+\.\s+/.test(lines[index].trim())) {
+        items.push(`<li>${renderReportInline(lines[index].trim().replace(/^\d+\.\s+/, ""))}</li>`);
+        index += 1;
+      }
+      blocks.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    if (/^>\s?/.test(trimmed)) {
+      const quoteLines = [];
+      while (index < lines.length && /^>\s?/.test(lines[index].trim())) {
+        quoteLines.push(lines[index].trim().replace(/^>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(`<blockquote>${quoteLines.map((quote) => `<p>${renderReportInline(quote)}</p>`).join("")}</blockquote>`);
+      continue;
+    }
+
+    const paragraph = [];
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !/^(#{1,3})\s+/.test(lines[index].trim()) &&
+      !/^[-*]\s+/.test(lines[index].trim()) &&
+      !/^\d+\.\s+/.test(lines[index].trim()) &&
+      !/^>\s?/.test(lines[index].trim()) &&
+      !isReportTableStart(lines, index)
+    ) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    blocks.push(`<p>${renderReportInline(paragraph.join(" "))}</p>`);
+  }
+
+  return blocks.join("");
+}
+
+function isReportTableStart(lines, index) {
+  const current = lines[index] || "";
+  const next = lines[index + 1] || "";
+  return current.includes("|") && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(next);
+}
+
+function renderReportTable(lines) {
+  const header = splitReportTableRow(lines[0]);
+  const rows = lines.slice(2).map(splitReportTableRow).filter((row) => row.length > 0);
+  const headHtml = header.map((cell) => `<th>${renderReportInline(cell)}</th>`).join("");
+  const bodyHtml = rows
+    .map((row) => `<tr>${header.map((_cell, index) => `<td>${renderReportInline(row[index] || "")}</td>`).join("")}</tr>`)
+    .join("");
+
+  return `<table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+}
+
+function splitReportTableRow(line) {
+  return String(line || "")
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function renderReportInline(text) {
+  return escapeHtml(text)
+    .replace(/\[\[(\d+)\]\]|\[(\d+)\]/g, (_match, doubleId, singleId) => {
+      const id = doubleId || singleId;
+      return `<sup class="endnote-ref"><a href="#source-${id}">${id}</a></sup>`;
+    })
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\b_([^_]+)_\b/g, "<em>$1</em>");
 }
 
 async function saveResearchReportHtml(html, signal) {
