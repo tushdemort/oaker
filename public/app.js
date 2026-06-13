@@ -42,6 +42,7 @@ const BEHAVIOR_PRESETS = [
 const GRAPH_COLORS = ["#18bdf2", "#2188ff", "#a837f4", "#e232ad", "#f42618", "#ff7a3d", "#f4d33d", "#6fd34f", "#35c6a8", "#22a6d6"];
 const GRAPH_LANE_STEP = 36;
 const GRAPH_LANE_BASE = 18;
+const RESEARCH_GRAPH_COLORS = ["#c85d5a", "#d19a5a", "#8da172", "#5f948a", "#9a7a96", "#738aa5"];
 const DEEP_RESEARCH_MAX_TURNS = 4;
 const DEEP_RESEARCH_MIN_TURNS = 2;
 const DEEP_RESEARCH_SITES_PER_TURN = 4;
@@ -410,9 +411,11 @@ async function sendDeepResearchMessage(prompt, model) {
   } catch (error) {
     if (error.name === "AbortError") {
       assistantMessage.research.status = "stopped";
+      assistantMessage.research.finishedAt = Date.now();
       assistantMessage.content = "Deep research stopped.";
     } else {
       assistantMessage.research.status = "error";
+      assistantMessage.research.finishedAt = Date.now();
       assistantMessage.research.error = error instanceof Error ? error.message : String(error);
       assistantMessage.content = `Deep research failed.\n\n${assistantMessage.research.error}`;
       assistantMessage.error = true;
@@ -431,6 +434,7 @@ function createResearchState(prompt) {
     prompt,
     status: "running",
     startedAt: Date.now(),
+    finishedAt: 0,
     turns: [],
     reportUrl: "",
     reportTitle: "",
@@ -534,6 +538,7 @@ async function runDeepResearch(prompt, model, assistantMessage, conversation, si
   const savedReport = await saveResearchReportHtml(reportHtml, signal);
 
   research.status = "complete";
+  research.finishedAt = Date.now();
   research.reportUrl = savedReport.url;
   research.reportTitle = `Deep research report: ${prompt}`;
   assistantMessage.content = `Deep research complete.\n\n[Open the report](${savedReport.url})`;
@@ -677,7 +682,8 @@ function collectResearchSources(research) {
         citationId: site.citationId,
         title: site.title,
         url: site.url,
-        snippet: site.snippet
+        snippet: site.snippet,
+        status: site.status
       });
     }
   }
@@ -1950,62 +1956,236 @@ function renderMarkdown(markdown, sources = []) {
 
 function renderResearchGraph(research = {}) {
   const turns = Array.isArray(research.turns) ? research.turns : [];
+  const sources = collectResearchSources(research);
+  const stats = getResearchStats(research, turns, sources);
   const statusText = formatResearchStatus(research.status);
+  const latestQuery = [...turns].reverse().find((turn) => turn.query)?.query || research.prompt || "Research";
+  const graphHtml = buildResearchMap(research, turns);
   const reportLink = research.reportUrl
     ? `<a class="research-report-link" href="${escapeAttribute(research.reportUrl)}" target="_blank" rel="noreferrer">Open report</a>`
     : "";
   const errorBlock = research.error ? `<div class="research-error">${escapeHtml(research.error)}</div>` : "";
 
-  const turnHtml = turns.map((turn, turnIndex) => {
-    const color = GRAPH_COLORS[turnIndex % GRAPH_COLORS.length];
-    const sites = Array.isArray(turn.sites) ? turn.sites : [];
-    const siteHtml = sites.map((site, siteIndex) => {
-      const siteColor = GRAPH_COLORS[(turnIndex + siteIndex + 1) % GRAPH_COLORS.length];
+  const sourceHtml = sources.length
+    ? sources.map((source) => {
+      const host = getSourceHost(source.url);
       return `
-        <a class="research-site ${escapeAttribute(site.status || "queued")}" style="--site-color: ${siteColor}" href="${escapeAttribute(site.url || "#")}" target="_blank" rel="noreferrer">
-          <span class="research-site-line"></span>
-          <span class="research-site-node">${site.citationId ? `[${site.citationId}]` : ""}</span>
-          <span class="research-site-copy">
-            <span class="research-site-title">${escapeHtml(site.title || site.url || "Queued source")}</span>
-            <span class="research-site-meta">${escapeHtml(formatResearchSiteStatus(site))}</span>
+        <a class="research-source-row ${escapeAttribute(source.status || "read")}" href="${escapeAttribute(source.url)}" target="_blank" rel="noreferrer">
+          <span class="research-source-id">[${source.citationId}]</span>
+          <span class="research-source-main">
+            <span class="research-source-title">${escapeHtml(source.title || source.url)}</span>
+            <span class="research-source-snippet">${escapeHtml(source.snippet || (source.status ? formatResearchStatus(source.status) : "Source indexed"))}</span>
           </span>
+          <span class="research-source-host">${escapeHtml(host)}</span>
         </a>
+      `;
+    }).join("")
+    : `<div class="research-source-empty">Awaiting sources</div>`;
+
+  const notesHtml = turns
+    .filter((turn) => turn.summary)
+    .map((turn, index) => {
+      const sourceList = collectResearchSources(research);
+      const turnNumber = turn.number || index + 1;
+      const title = turn.query || `Turn ${turnNumber}`;
+      const stateLabel = formatResearchStatus(turn.status);
+      return `
+        <details class="research-note">
+          <summary>
+            <span>Turn ${turnNumber}</span>
+            <span>${escapeHtml(stateLabel)}</span>
+          </summary>
+          <div class="research-note-query">${escapeHtml(title)}</div>
+          <div class="research-note-content">${renderMarkdown(turn.summary, sourceList)}</div>
+        </details>
       `;
     }).join("");
 
-    return `
-      <section class="research-turn" style="--turn-color: ${color}">
-        <div class="research-turn-lane">
-          <span class="research-turn-rail"></span>
-          <span class="research-turn-node">${turn.number || turnIndex + 1}</span>
-        </div>
-        <div class="research-turn-body">
-          <div class="research-turn-head">
-            <span>Turn ${turn.number || turnIndex + 1}</span>
-            <span>${escapeHtml(formatResearchStatus(turn.status))}</span>
-          </div>
-          <div class="research-query">${escapeHtml(turn.query || "")}</div>
-          <div class="research-sites">${siteHtml || '<div class="research-waiting">Waiting for search results.</div>'}</div>
-          ${turn.summary ? `<details class="research-summary"><summary>Turn notes</summary>${renderMarkdown(turn.summary, collectResearchSources(research))}</details>` : ""}
-        </div>
-      </section>
-    `;
-  }).join("");
+  const notesBlock = notesHtml ? `<div class="research-notes">${notesHtml}</div>` : "";
 
   return `
     <div class="research-run ${escapeAttribute(research.status || "running")}">
-      <div class="research-run-header">
-        <div>
-          <div class="research-kicker">Deep research</div>
-          <div class="research-question">${escapeHtml(research.prompt || "Research")}</div>
+      <div class="research-map-shell">
+        <div class="research-run-header">
+          <div>
+            <div class="research-kicker">Deep research</div>
+            <div class="research-question">${escapeHtml(research.prompt || "Research")}</div>
+            <div class="research-current-query">${escapeHtml(latestQuery)}</div>
+          </div>
+          <div class="research-status">
+            <span class="research-status-dot" aria-hidden="true"></span>
+            <span>${escapeHtml(statusText)}</span>
+          </div>
         </div>
-        <div class="research-status">${escapeHtml(statusText)}</div>
+        <div class="research-map" aria-label="Deep research graph">
+          ${graphHtml}
+        </div>
+        <div class="research-console">
+          <span>sources ${formatResearchCount(stats.sources)}</span>
+          <span>turns ${formatResearchCount(stats.turns)}/${formatResearchCount(stats.maxTurns)}</span>
+          <span>read ${formatResearchCount(stats.readSites)}</span>
+          <span>elapsed ${escapeHtml(formatResearchElapsed(research))}</span>
+        </div>
       </div>
-      <div class="research-turns">${turnHtml || '<div class="research-waiting">Preparing research plan.</div>'}</div>
+      <div class="research-source-ledger">${sourceHtml}</div>
+      ${notesBlock}
       ${errorBlock}
       ${reportLink ? `<div class="research-report">${reportLink}</div>` : ""}
     </div>
   `;
+}
+
+function buildResearchMap(research, turns) {
+  const hub = { x: 36, y: 58 };
+  const lines = [];
+  const nodes = [
+    `<span class="research-map-node hub" style="--x: ${hub.x}; --y: ${hub.y}; --node-color: ${RESEARCH_GRAPH_COLORS[0]}" title="${escapeAttribute(research.prompt || "Research")}">R</span>`
+  ];
+
+  if (turns.length === 0) {
+    return `
+      <svg class="research-map-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+      ${nodes.join("")}
+      <span class="research-map-hint">initializing</span>
+    `;
+  }
+
+  turns.forEach((turn, turnIndex) => {
+    const color = RESEARCH_GRAPH_COLORS[turnIndex % RESEARCH_GRAPH_COLORS.length];
+    const turnPoint = getResearchTurnPoint(turnIndex, turns.length);
+    const turnNumber = turn.number || turnIndex + 1;
+
+    lines.push(renderResearchLine(hub, turnPoint, color, "turn"));
+    nodes.push(
+      `<span class="research-map-node turn ${escapeAttribute(turn.status || "running")}" style="--x: ${turnPoint.x}; --y: ${turnPoint.y}; --node-color: ${color}" title="${escapeAttribute(`Turn ${turnNumber}: ${turn.query || ""}`)}">T${turnNumber}</span>`
+    );
+
+    const sites = Array.isArray(turn.sites) ? turn.sites : [];
+    sites.forEach((site, siteIndex) => {
+      const sitePoint = getResearchSitePoint(turnPoint, siteIndex, sites.length, turnIndex);
+      const label = site.citationId ? String(site.citationId) : String(siteIndex + 1);
+      const status = site.status || "queued";
+
+      lines.push(renderResearchLine(turnPoint, sitePoint, color, "source"));
+      if (site.url) {
+        nodes.push(
+          `<a class="research-map-node source ${escapeAttribute(status)}" style="--x: ${sitePoint.x}; --y: ${sitePoint.y}; --node-color: ${color}" href="${escapeAttribute(site.url)}" target="_blank" rel="noreferrer" title="${escapeAttribute(site.title || site.url)}">${escapeHtml(label)}</a>`
+        );
+      } else {
+        nodes.push(
+          `<span class="research-map-node source ${escapeAttribute(status)}" style="--x: ${sitePoint.x}; --y: ${sitePoint.y}; --node-color: ${color}" title="${escapeAttribute(site.title || "Queued source")}">${escapeHtml(label)}</span>`
+        );
+      }
+    });
+  });
+
+  return `
+    <svg class="research-map-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      ${lines.join("")}
+    </svg>
+    ${nodes.join("")}
+  `;
+}
+
+function renderResearchLine(from, to, color, type) {
+  const midX = (from.x + to.x) / 2;
+  return `<path class="research-map-line ${type}" style="--line-color: ${color}" d="M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}" />`;
+}
+
+function getResearchTurnPoint(index, total) {
+  const fixed = [
+    { x: 36, y: 24 },
+    { x: 65, y: 36 },
+    { x: 52, y: 78 },
+    { x: 78, y: 64 }
+  ];
+
+  if (index < fixed.length) return fixed[index];
+
+  const angle = -85 + (index * 260) / Math.max(total, 1);
+  const radians = (angle * Math.PI) / 180;
+  return {
+    x: clampResearchPoint(50 + Math.cos(radians) * 32),
+    y: clampResearchPoint(54 + Math.sin(radians) * 34)
+  };
+}
+
+function getResearchSitePoint(turnPoint, siteIndex, siteCount, turnIndex) {
+  const offsetSets = [
+    [
+      { x: 0, y: -15 },
+      { x: 15, y: -9 },
+      { x: 20, y: 3 },
+      { x: 12, y: 13 }
+    ],
+    [
+      { x: 15, y: -12 },
+      { x: 23, y: -2 },
+      { x: 17, y: 11 },
+      { x: 4, y: 16 }
+    ],
+    [
+      { x: -13, y: 12 },
+      { x: 1, y: 18 },
+      { x: 16, y: 11 },
+      { x: 22, y: -2 }
+    ],
+    [
+      { x: 12, y: -14 },
+      { x: 22, y: -4 },
+      { x: 18, y: 10 },
+      { x: 4, y: 16 }
+    ]
+  ];
+  const offsets = offsetSets[turnIndex % offsetSets.length];
+  const fallbackAngle = (-60 + (siteIndex * 120) / Math.max(siteCount - 1, 1) + turnIndex * 17) * (Math.PI / 180);
+  const fallback = {
+    x: Math.cos(fallbackAngle) * 20,
+    y: Math.sin(fallbackAngle) * 16
+  };
+  const offset = offsets[siteIndex] || fallback;
+
+  return {
+    x: clampResearchPoint(turnPoint.x + offset.x),
+    y: clampResearchPoint(turnPoint.y + offset.y)
+  };
+}
+
+function getResearchStats(research, turns, sources) {
+  const sites = turns.flatMap((turn) => Array.isArray(turn.sites) ? turn.sites : []);
+  return {
+    sources: sources.length,
+    turns: turns.length,
+    maxTurns: DEEP_RESEARCH_MAX_TURNS,
+    readSites: sites.filter((site) => site.status === "read" || site.status === "skimmed").length,
+    status: research.status || "running"
+  };
+}
+
+function formatResearchElapsed(research) {
+  const startedAt = Number(research.startedAt || 0);
+  if (!startedAt) return "00:00";
+
+  const finishedAt = Number(research.finishedAt || 0);
+  const end = finishedAt || Date.now();
+  const totalSeconds = Math.max(0, Math.floor((end - startedAt) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatResearchCount(value) {
+  return String(Number(value) || 0).padStart(2, "0");
+}
+
+function clampResearchPoint(value) {
+  return Math.max(7, Math.min(93, Math.round(value * 10) / 10));
 }
 
 function formatResearchStatus(status) {

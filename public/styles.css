@@ -1029,168 +1029,299 @@ h2 {
 
 .research-run {
   display: grid;
-  gap: 18px;
+  gap: 14px;
+}
+
+.research-map-shell {
+  overflow: hidden;
+  color: #efe7dd;
+  background:
+    radial-gradient(circle at 38% 55%, rgba(184, 95, 62, 0.2), transparent 21%),
+    radial-gradient(circle at 72% 36%, rgba(100, 119, 97, 0.15), transparent 22%),
+    linear-gradient(180deg, #1b1313 0%, #150f10 100%);
+  border: 1px solid rgba(184, 95, 62, 0.22);
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
 
 .research-run-header {
   display: flex;
   justify-content: space-between;
-  gap: 18px;
+  gap: 16px;
   align-items: start;
-  padding-bottom: 14px;
-  border-bottom: 1px solid rgba(124, 112, 96, 0.16);
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid rgba(184, 95, 62, 0.14);
 }
 
 .research-kicker,
-.research-status,
-.research-turn-head {
-  color: var(--muted);
+.research-status {
+  color: rgba(239, 231, 221, 0.62);
   font-size: 0.78rem;
   font-weight: 750;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
 }
 
 .research-question {
   margin-top: 4px;
-  font-size: 1.04rem;
+  color: #fff9ef;
+  font-size: 1rem;
   font-weight: 750;
   line-height: 1.35;
 }
 
+.research-current-query {
+  overflow: hidden;
+  max-width: min(560px, 58vw);
+  margin-top: 8px;
+  color: rgba(239, 231, 221, 0.54);
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .research-status {
+  display: inline-flex;
   flex: 0 0 auto;
-  padding: 6px 9px;
-  background: rgba(52, 79, 67, 0.08);
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
 }
 
-.research-turns {
-  display: grid;
-  gap: 0;
+.research-status-dot {
+  width: 8px;
+  height: 8px;
+  background: #c85d5a;
+  border-radius: 999px;
+  box-shadow: 0 0 16px rgba(200, 93, 90, 0.55);
 }
 
-.research-turn {
-  display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  gap: 14px;
-  min-height: 76px;
+.research-run.complete .research-status-dot {
+  background: #8da172;
+  box-shadow: 0 0 16px rgba(141, 161, 114, 0.5);
 }
 
-.research-turn-lane {
+.research-run.error .research-status-dot,
+.research-run.stopped .research-status-dot {
+  background: #d19a5a;
+  box-shadow: 0 0 16px rgba(209, 154, 90, 0.45);
+}
+
+.research-map {
   position: relative;
-  min-height: 76px;
+  min-height: 310px;
+  overflow: hidden;
+  border-top: 1px solid rgba(0, 0, 0, 0.22);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.research-turn-rail {
+.research-map::before {
   position: absolute;
-  top: -10px;
-  bottom: -10px;
-  left: 25px;
-  width: 3px;
-  background: var(--turn-color);
-  border-radius: 999px;
+  inset: 0;
+  content: "";
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 100% 44px, 44px 100%;
+  opacity: 0.35;
+  pointer-events: none;
 }
 
-.research-turn-node {
-  position: sticky;
-  top: 8px;
+.research-map-lines {
+  position: absolute;
+  inset: 0;
   z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  margin: 8px auto 0;
-  color: #fff;
-  background: #20242c;
-  border: 2px solid var(--turn-color);
-  border-radius: 999px;
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6);
-  font-size: 0.82rem;
-  font-weight: 800;
+  width: 100%;
+  height: 100%;
 }
 
-.research-turn-body {
-  display: grid;
-  gap: 10px;
-  padding: 12px 0 18px;
+.research-map-line {
+  fill: none;
+  stroke: var(--line-color);
+  stroke-linecap: round;
+  stroke-width: 0.55;
+  opacity: 0.42;
 }
 
-.research-turn-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
+.research-map-line.source {
+  stroke-width: 0.38;
+  opacity: 0.35;
 }
 
-.research-query {
-  padding: 10px 12px;
-  background: rgba(52, 79, 67, 0.08);
-  border: 1px solid rgba(52, 79, 67, 0.1);
-  border-radius: var(--radius);
-  font-weight: 700;
-}
-
-.research-sites {
-  display: grid;
-  gap: 8px;
-}
-
-.research-site {
-  position: relative;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 10px;
-  min-height: 48px;
-  padding: 9px 12px 9px 0;
-  color: var(--ink);
-  text-decoration: none;
-  background: rgba(255, 255, 255, 0.62);
-  border: 1px solid rgba(124, 112, 96, 0.14);
-  border-left: 4px solid var(--site-color);
-  border-radius: var(--radius);
-}
-
-.research-site:hover {
-  background: #fff;
-  border-color: rgba(52, 79, 67, 0.2);
-  border-left-color: var(--site-color);
-}
-
-.research-site-line {
+.research-map-node {
   position: absolute;
-  top: 50%;
-  left: -36px;
-  width: 34px;
-  height: 3px;
-  background: var(--site-color);
-  border-radius: 999px;
-}
-
-.research-site-node {
+  z-index: 2;
+  left: calc(var(--x) * 1%);
+  top: calc(var(--y) * 1%);
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 30px;
-  color: #fff;
-  background: var(--site-color);
-  border-radius: 999px;
-  font-size: 0.72rem;
+  color: #fdf7ef;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
   font-weight: 800;
+  text-decoration: none;
+  transform: translate(-50%, -50%);
 }
 
-.research-site-copy {
+.research-map-node.hub {
+  width: 36px;
+  height: 36px;
+  background: var(--node-color);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 7px rgba(200, 93, 90, 0.08),
+    0 0 34px rgba(200, 93, 90, 0.3);
+  font-size: 0.78rem;
+}
+
+.research-map-node.turn {
+  width: 25px;
+  height: 25px;
+  color: #fff8ed;
+  background: rgba(18, 13, 14, 0.9);
+  border: 2px solid var(--node-color);
+  border-radius: 999px;
+  box-shadow: 0 0 18px rgba(200, 93, 90, 0.24);
+  font-size: 0.62rem;
+}
+
+.research-map-node.source {
+  width: 18px;
+  height: 18px;
+  color: rgba(255, 248, 237, 0.82);
+  background: rgba(18, 13, 14, 0.82);
+  border: 2px solid var(--node-color);
+  border-radius: 999px;
+  box-shadow: 0 0 15px rgba(200, 93, 90, 0.2);
+  font-size: 0.5rem;
+}
+
+.research-map-node.source:hover {
+  color: #fffaf3;
+  background: var(--node-color);
+}
+
+.research-map-node.read,
+.research-map-node.skimmed,
+.research-map-node.done {
+  background: rgba(37, 28, 29, 0.95);
+}
+
+.research-map-node.reading,
+.research-map-node.searching,
+.research-map-node.thinking {
+  animation: researchPulse 1.25s ease-in-out infinite;
+}
+
+.research-map-hint {
+  position: absolute;
+  z-index: 2;
+  left: 45%;
+  top: 57%;
+  color: rgba(239, 231, 221, 0.56);
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+  font-size: 0.74rem;
+  transform: translateY(28px);
+}
+
+.research-console {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 9px 14px 10px;
+  color: rgba(239, 231, 221, 0.58);
+  background: rgba(0, 0, 0, 0.18);
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.research-source-ledger {
   display: grid;
+  gap: 6px;
+}
+
+.research-source-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) minmax(96px, auto);
+  gap: 12px;
+  align-items: center;
+  min-height: 46px;
+  padding: 8px 10px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.52);
+  border: 1px solid rgba(124, 112, 96, 0.13);
+  border-radius: var(--radius);
+  text-decoration: none;
+}
+
+.research-source-row:hover {
+  background: #fffdf8;
+  border-color: rgba(52, 79, 67, 0.2);
+}
+
+.research-source-id {
+  color: var(--sage-dark);
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+  font-size: 0.78rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.research-source-main {
+  display: grid;
+  gap: 2px;
   min-width: 0;
 }
 
-.research-site-title {
+.research-source-title {
   overflow: hidden;
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.research-site-meta {
+.research-source-snippet,
+.research-source-host {
   overflow: hidden;
   color: var(--muted);
   font-size: 0.8rem;
@@ -1198,14 +1329,47 @@ h2 {
   white-space: nowrap;
 }
 
-.research-summary {
-  color: var(--muted);
-  font-size: 0.92rem;
+.research-source-host {
+  text-align: right;
 }
 
-.research-summary summary {
+.research-source-empty {
+  padding: 10px 12px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(124, 112, 96, 0.14);
+  border-radius: var(--radius);
+}
+
+.research-notes {
+  display: grid;
+  gap: 7px;
+}
+
+.research-note {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid rgba(124, 112, 96, 0.12);
+  border-radius: var(--radius);
+}
+
+.research-note summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
   cursor: pointer;
   font-weight: 750;
+}
+
+.research-note-query {
+  padding: 0 12px 10px;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.research-note-content {
+  padding: 0 12px 10px;
 }
 
 .research-report {
@@ -1219,22 +1383,24 @@ h2 {
   padding: 0 14px;
   color: #fffaf3;
   background: var(--sage-dark);
-  border-radius: 999px;
+  border-radius: var(--radius);
   font-weight: 750;
   text-decoration: none;
 }
 
-.research-error,
-.research-waiting {
+.research-error {
   padding: 10px 12px;
-  color: var(--muted);
+  color: var(--error);
   background: rgba(255, 255, 255, 0.5);
   border: 1px solid rgba(124, 112, 96, 0.14);
   border-radius: var(--radius);
 }
 
-.research-error {
-  color: var(--error);
+@keyframes researchPulse {
+  50% {
+    transform: translate(-50%, -50%) scale(1.14);
+    box-shadow: 0 0 26px rgba(200, 93, 90, 0.34);
+  }
 }
 
 .citation-chip {
@@ -1652,6 +1818,22 @@ h2 {
     left: 14px;
     width: auto;
   }
+
+  .research-current-query {
+    max-width: 52vw;
+  }
+
+  .research-map {
+    min-height: 260px;
+  }
+
+  .research-source-row {
+    grid-template-columns: 46px minmax(0, 1fr);
+  }
+
+  .research-source-host {
+    display: none;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1691,5 +1873,22 @@ h2 {
 
   .graph-row {
     grid-template-columns: minmax(86px, auto) minmax(0, 1fr);
+  }
+
+  .research-run-header {
+    display: grid;
+  }
+
+  .research-current-query {
+    max-width: 100%;
+  }
+
+  .research-map {
+    min-height: 230px;
+  }
+
+  .research-console {
+    gap: 7px 12px;
+    font-size: 0.68rem;
   }
 }
