@@ -43,9 +43,10 @@ const GRAPH_COLORS = ["#18bdf2", "#2188ff", "#a837f4", "#e232ad", "#f42618", "#f
 const GRAPH_LANE_STEP = 36;
 const GRAPH_LANE_BASE = 18;
 const RESEARCH_GRAPH_COLORS = ["#c85d5a", "#d19a5a", "#8da172", "#5f948a", "#9a7a96", "#738aa5"];
-const DEEP_RESEARCH_MAX_TURNS = 4;
-const DEEP_RESEARCH_MIN_TURNS = 2;
-const DEEP_RESEARCH_SITES_PER_TURN = 4;
+const DEEP_RESEARCH_MAX_TURNS = 10;
+const DEEP_RESEARCH_MIN_TURNS = 3;
+const DEEP_RESEARCH_SITES_PER_TURN = 20;
+const DEEP_RESEARCH_EXTRACT_CHARS = 4200;
 
 const elements = {
   composer: document.querySelector("#composer"),
@@ -547,7 +548,7 @@ async function runDeepResearch(prompt, model, assistantMessage, conversation, si
 }
 
 async function fetchResearchSearch(query, signal) {
-  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=8`, { signal });
+  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=${DEEP_RESEARCH_SITES_PER_TURN}`, { signal });
   if (!response.ok) {
     const error = await readError(response);
     throw new Error(error || "Research search failed.");
@@ -568,7 +569,7 @@ async function fetchResearchPage(url, signal) {
 
 async function summarizeResearchTurn(prompt, turn, priorNotes, model, signal) {
   const sourceBlocks = turn.sites
-    .map((site) => `[[${site.citationId}]] ${site.title}\nURL: ${site.url}\nSnippet: ${site.snippet || "No snippet"}\nExtract:\n${(site.text || site.error || "").slice(0, 5500)}`)
+    .map((site) => `[[${site.citationId}]] ${site.title}\nURL: ${site.url}\nSnippet: ${site.snippet || "No snippet"}\nExtract:\n${(site.text || site.error || "").slice(0, DEEP_RESEARCH_EXTRACT_CHARS)}`)
     .join("\n\n");
   const prior = priorNotes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n") || "None yet.";
 
@@ -578,7 +579,7 @@ async function summarizeResearchTurn(prompt, turn, priorNotes, model, signal) {
       ...getResearchBaseMessages(),
       {
         role: "user",
-        content: `Research question: ${prompt}\n\nPrior turn notes:\n${prior}\n\nCurrent turn ${turn.number} search query: ${turn.query}\n\nWebsite material:\n${sourceBlocks}\n\nWrite disciplined research notes for this turn in the style of a meticulous client advisory analyst. Use only the supplied material for web facts. Structure the notes as: Key findings, Evidence quality, Contradictions or tension, Implications, Open questions, and Follow-up search angles. Use citations like [[1]] after evidence-backed claims. Make the follow-up angles depend on what was found in this turn and earlier turns, not just on the original prompt.`
+        content: `Research question: ${prompt}\n\nPrior turn notes:\n${prior}\n\nCurrent turn ${turn.number} search query: ${turn.query}\n\nWebsite material:\n${sourceBlocks}\n\nWrite disciplined research notes for this turn in the style of a meticulous client advisory analyst. Use only the supplied material for web facts. Structure the notes as: Key findings, Evidence quality, Contradictions or tension, Implications, Open questions, and Follow-up search angles. Use citations like [[1]] after evidence-backed claims. Make the follow-up angles depend on what was found in this turn and earlier turns, not just on the original prompt. Be detailed enough that the final report can be extensive: preserve important dates, actors, mechanisms, quantitative claims, disagreements, and source caveats. Do not write a final report here.`
       }
     ],
     signal
@@ -592,7 +593,7 @@ async function chooseNextResearchQuery(prompt, notes, turnNumber, model, signal)
       ...getResearchBaseMessages(),
       {
         role: "user",
-        content: `Research question: ${prompt}\n\nCompleted notes from all prior turns:\n${notes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n")}\n\nChoose the next research turn like a meticulous analyst planning the next interview or diligence workstream. The next query must be based on the strongest gaps, contradictions, missing numbers, source-quality issues, or unexpected findings from the completed notes. Avoid repeating the original question unless the prior evidence shows that it needs a narrower version. Use another turn only if it would materially improve the final client report.\n\nReturn only JSON in this exact shape:\n{"status":"continue","nextQuery":"specific web search query","rationale":"why this query follows from prior findings"}\nor\n{"status":"complete","nextQuery":"","rationale":"why enough evidence has been gathered"}\n\nMinimum turns: ${DEEP_RESEARCH_MIN_TURNS}. Current turns completed: ${turnNumber}.`
+        content: `Research question: ${prompt}\n\nCompleted notes from all prior turns:\n${notes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n")}\n\nChoose the next research turn like a meticulous analyst planning the next interview or diligence workstream. The next query must be based on the strongest gaps, contradictions, missing numbers, source-quality issues, or unexpected findings from the completed notes. Avoid repeating the original question unless the prior evidence shows that it needs a narrower version. Use another turn if it would materially improve a detailed final client report; you may continue up to ${DEEP_RESEARCH_MAX_TURNS} turns, and each turn can inspect up to ${DEEP_RESEARCH_SITES_PER_TURN} websites.\n\nReturn only JSON in this exact shape:\n{"status":"continue","nextQuery":"specific web search query","rationale":"why this query follows from prior findings"}\nor\n{"status":"complete","nextQuery":"","rationale":"why enough evidence has been gathered"}\n\nMinimum turns: ${DEEP_RESEARCH_MIN_TURNS}. Current turns completed: ${turnNumber}.`
       }
     ],
     signal
@@ -676,7 +677,7 @@ async function writeResearchReport(prompt, notes, sources, model, signal) {
       ...getResearchBaseMessages(),
       {
         role: "user",
-        content: `Research question: ${prompt}\n\nTurn notes:\n${notes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n")}\n\nSources:\n${sources.map((source) => `[[${source.citationId}]] ${source.title}\n${source.url}\n${source.snippet || ""}`).join("\n\n")}\n\nWrite an extensive, client-ready research report in Markdown with the discipline of a senior strategy consultant. The tone and structure should fit the subject matter: use an investor memo style for markets, policy brief style for regulation, technical diligence style for engineering topics, or executive advisory style for general business topics. Include a concise title, executive summary, key findings, evidence assessment, detailed analysis, implications, risks or unknowns, recommendations or next steps when appropriate, and a source-grounded conclusion. Use tables when they make comparisons clearer. Use citations like [[number]] as clean endnote markers for evidence-backed claims, but do not overload every sentence. Do not invent citations or facts.`
+        content: `Research question: ${prompt}\n\nTurn notes:\n${notes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n")}\n\nSources:\n${sources.map((source) => `[[${source.citationId}]] ${source.title}\n${source.url}\n${source.snippet || ""}`).join("\n\n")}\n\nWrite a detailed, extensive, client-ready research report in Markdown with the discipline of a senior strategy consultant or professional researcher. Target at least 3,500 words when the evidence base supports it; do not compress the work into a short memo. The tone and structure should fit the subject matter: use an investor memo style for markets, policy brief style for regulation, technical diligence style for engineering topics, historical analysis style for history, or executive advisory style for general business topics.\n\nHard requirements:\n- Do not invent metadata. Do not write Prepared For, Prepared By, Date, Subject, Style Guide, client name, or memo boilerplate in the report body.\n- Do not use decorative separators like ***.\n- Start with a single Markdown H1 title only, then the report body.\n- Include an executive summary, thesis, methodology/evidence base, detailed analysis with multiple sections, chronology or framework where useful, source-quality assessment, contradictions or uncertainties, implications, and conclusion.\n- Use tables when they make comparisons clearer.\n- Use citations like [[number]] as clean endnote markers for evidence-backed claims, but do not overload every sentence.\n- Do not invent citations or facts.`
       }
     ],
     signal
@@ -712,7 +713,7 @@ function getResearchBaseMessages() {
   const messages = [
     {
       role: "system",
-      content: "You are a meticulous deep research analyst. Use provided web excerpts only for web facts, make later research turns depend on earlier findings, cite claims with supplied citation IDs, assess source quality, preserve uncertainty, and produce client-ready analysis rather than generic summaries."
+      content: "You are a meticulous deep research analyst. Use provided web excerpts only for web facts, make later research turns depend on earlier findings, cite claims with supplied citation IDs, assess source quality, preserve uncertainty, and produce detailed client-ready analysis rather than generic summaries. Never fabricate report metadata such as Prepared For, Date, client names, or style-guide labels."
     }
   ];
 
@@ -1011,9 +1012,9 @@ function buildResearchReportHtml(prompt, reportMarkdown, sources) {
         <h1>${escapeHtml(report.title)}</h1>
       </div>
       <aside class="cover-aside" aria-label="Report metadata">
-        <div class="meta-item"><span class="meta-label">Prepared</span>${escapeHtml(generatedAt)}</div>
+        <div class="meta-item"><span class="meta-label">Generated</span>${escapeHtml(generatedAt)}</div>
         <div class="meta-item"><span class="meta-label">Evidence base</span>${escapeHtml(sourceCount)}</div>
-        <div class="meta-item"><span class="meta-label">Subject</span>${escapeHtml(prompt)}</div>
+        <div class="meta-item"><span class="meta-label">Question</span>${escapeHtml(prompt)}</div>
       </aside>
     </header>
     <div class="report-frame">
@@ -1033,15 +1034,43 @@ function buildResearchReportHtml(prompt, reportMarkdown, sources) {
 }
 
 function prepareResearchReport(prompt, reportMarkdown) {
-  const markdown = String(reportMarkdown || "").trim();
+  const markdown = stripReportBoilerplate(String(reportMarkdown || "")).trim();
   const heading = markdown.match(/^#\s+(.+?)(?:\n+|$)/);
   const title = heading ? cleanMarkdownInline(heading[1]) : makeReportTitle(prompt);
-  const bodyMarkdown = heading ? markdown.slice(heading[0].length).trim() : markdown;
+  const bodyMarkdown = stripReportBoilerplate(heading ? markdown.slice(heading[0].length) : markdown).trim();
 
   return {
     title,
     bodyMarkdown: bodyMarkdown || "No report body was generated."
   };
+}
+
+function stripReportBoilerplate(markdown) {
+  const lines = String(markdown || "").split("\n");
+  const cleaned = [];
+  let inOpeningBoilerplate = true;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const normalized = line.replace(/\*\*/g, "").trim();
+    const isSeparator = /^-{3,}$|^\*{3,}$/.test(normalized);
+    const isFakeMetadata = /^(prepared\s+for|prepared\s+by|client|date|subject|style\s+guide|memo\s+to|memo\s+from)\s*:/i.test(normalized);
+    const hasFakeMetadataCluster =
+      /prepared\s+for\s*:/i.test(normalized) &&
+      /(date\s*:|subject\s*:|style\s+guide\s*:)/i.test(normalized);
+
+    if (inOpeningBoilerplate && (isSeparator || isFakeMetadata || hasFakeMetadataCluster)) {
+      continue;
+    }
+
+    if (line) {
+      inOpeningBoilerplate = false;
+    }
+
+    cleaned.push(rawLine);
+  }
+
+  return cleaned.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
 function makeReportTitle(prompt) {
@@ -1162,6 +1191,11 @@ function renderReportText(text) {
     const trimmed = line.trim();
 
     if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    if (/^\*{3,}$|^-{3,}$/.test(trimmed)) {
       index += 1;
       continue;
     }

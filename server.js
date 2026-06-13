@@ -300,37 +300,98 @@ async function proxyChat(req, res) {
 
 async function searchDuckDuckGo(url, res) {
   const query = (url.searchParams.get("q") || "").trim();
-  const limit = clamp(Number(url.searchParams.get("limit") || 6), 1, 10);
+  const limit = clamp(Number(url.searchParams.get("limit") || 6), 1, 20);
   if (!query) {
     sendJson(res, 400, { error: "Missing search query" });
     return;
   }
 
-  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-
   try {
-    const upstream = await fetch(searchUrl, {
-      headers: {
-        "Accept": "text/html,application/xhtml+xml",
-        "User-Agent": "Mozilla/5.0 OakerLocalChat/0.1"
-      }
+    sendJson(res, 200, {
+      query,
+      results: await searchDuckDuckGoPages(query, limit)
     });
+  } catch (error) {
+    const detail = error?.name === "TimeoutError" || error?.name === "AbortError"
+      ? "DuckDuckGo timed out or rate limited this request"
+      : error instanceof Error ? error.message : String(error);
+
+    sendJson(res, 502, {
+      error: "Unable to search DuckDuckGo",
+      detail
+    });
+  }
+}
+
+async function searchDuckDuckGoPages(query, limit) {
+  const results = [];
+  const seen = new Set();
+  const offsets = [0, 30, 60];
+
+  for (const offset of offsets) {
+    if (results.length >= limit) break;
+
+    const searchUrl = new URL("https://html.duckduckgo.com/html/");
+    searchUrl.searchParams.set("q", query);
+    if (offset > 0) {
+      searchUrl.searchParams.set("s", String(offset));
+      searchUrl.searchParams.set("dc", String(offset + 1));
+      searchUrl.searchParams.set("api", "d.js");
+      searchUrl.searchParams.set("o", "json");
+      searchUrl.searchParams.set("v", "l");
+    }
+
+    let upstream;
+
+    try {
+      upstream = await fetch(searchUrl, {
+        headers: {
+          "Accept": "text/html,application/xhtml+xml",
+          "User-Agent": "Mozilla/5.0 OakerLocalChat/0.1"
+        },
+        signal: AbortSignal.timeout(20000)
+      });
+    } catch (error) {
+      if (results.length > 0) break;
+      throw error;
+    }
+
+    if (!upstream.ok && results.length > 0) {
+      break;
+    }
 
     if (!upstream.ok) {
-      sendJson(res, upstream.status, { error: "DuckDuckGo search failed" });
-      return;
+      throw new Error("DuckDuckGo search failed");
     }
 
     const html = await upstream.text();
-    sendJson(res, 200, {
-      query,
-      results: parseDuckDuckGoResults(html).slice(0, limit)
-    });
-  } catch (error) {
-    sendJson(res, 502, {
-      error: "Unable to search DuckDuckGo",
-      detail: error instanceof Error ? error.message : String(error)
-    });
+    for (const result of parseDuckDuckGoResults(html)) {
+      const key = normalizeResultUrl(result.url);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      results.push(result);
+      if (results.length >= limit) break;
+    }
+
+    if (results.length < limit) {
+      await delay(650);
+    }
+  }
+
+  return results.slice(0, limit);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeResultUrl(url) {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    return parsed.href.replace(/\/$/, "");
+  } catch {
+    return url;
   }
 }
 
@@ -367,7 +428,7 @@ async function fetchResearchPage(url, res) {
     const contentType = upstream.headers.get("content-type") || "";
     const html = await upstream.text();
     const title = extractTitle(html) || parsed.hostname;
-    const text = htmlToResearchText(html).slice(0, 14000);
+    const text = htmlToResearchText(html).slice(0, 18000);
 
     sendJson(res, 200, {
       url: parsed.href,
