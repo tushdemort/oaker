@@ -3816,20 +3816,112 @@ function makeTitle(prompt) {
 function renderMarkdown(markdown, sources = []) {
   if (!markdown) return "";
 
-  const parts = [];
-  const codeBlockPattern = /```([\w-]*)\n?([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match;
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  const blocks = [];
+  let index = 0;
 
-  while ((match = codeBlockPattern.exec(markdown)) !== null) {
-    parts.push(renderText(markdown.slice(lastIndex, match.index), sources));
-    const code = escapeHtml(match[2]);
-    parts.push(`<pre><code>${code}</code></pre>`);
-    lastIndex = match.index + match[0].length;
+  while (index < lines.length) {
+    const line = lines[index] || "";
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    const fence = trimmed.match(/^(```|~~~)\s*([^\s`]*)?.*$/);
+    if (fence) {
+      const marker = fence[1];
+      const language = fence[2] || "";
+      const codeLines = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith(marker)) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(renderCodeBlock(codeLines.join("\n"), language));
+      continue;
+    }
+
+    if (/^#{1,6}$|^\*{3,}$|^-{3,}$/.test(trimmed)) {
+      blocks.push("<hr />");
+      index += 1;
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = Math.min(heading[1].length + 1, 5);
+      blocks.push(`<h${level}>${renderInline(heading[2], sources)}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    if (isMarkdownTableStart(lines, index)) {
+      const tableLines = [lines[index], lines[index + 1]];
+      index += 2;
+      while (index < lines.length && lines[index].trim() && lines[index].includes("|")) {
+        tableLines.push(lines[index]);
+        index += 1;
+      }
+      blocks.push(renderMarkdownTable(tableLines, sources));
+      continue;
+    }
+
+    if (/^>\s?/.test(trimmed)) {
+      const quoteLines = [];
+      while (index < lines.length && /^>\s?/.test((lines[index] || "").trim())) {
+        quoteLines.push((lines[index] || "").trim().replace(/^>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(`<blockquote>${renderMarkdown(quoteLines.join("\n"), sources)}</blockquote>`);
+      continue;
+    }
+
+    if (/^\s{0,3}[-*+]\s+/.test(line)) {
+      const items = [];
+      let hasTasks = false;
+      while (index < lines.length && /^\s{0,3}[-*+]\s+/.test(lines[index] || "")) {
+        let itemText = (lines[index] || "").replace(/^\s{0,3}[-*+]\s+/, "");
+        const task = itemText.match(/^\[([ xX])\]\s+(.+)$/);
+        if (task) {
+          hasTasks = true;
+          const checked = task[1].toLowerCase() === "x";
+          itemText = `<input type="checkbox" disabled ${checked ? "checked" : ""} /> ${renderInline(task[2], sources)}`;
+        } else {
+          itemText = renderInline(itemText, sources);
+        }
+        items.push(`<li>${itemText}</li>`);
+        index += 1;
+      }
+      blocks.push(`<ul${hasTasks ? ' class="task-list"' : ""}>${items.join("")}</ul>`);
+      continue;
+    }
+
+    if (/^\s{0,3}\d+\.\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length && /^\s{0,3}\d+\.\s+/.test(lines[index] || "")) {
+        items.push(`<li>${renderInline((lines[index] || "").replace(/^\s{0,3}\d+\.\s+/, ""), sources)}</li>`);
+        index += 1;
+      }
+      blocks.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    const paragraph = [];
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !isMarkdownBlockStart(lines, index)
+    ) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    blocks.push(`<p>${renderInline(paragraph.join("\n"), sources).replace(/\n/g, "<br>")}</p>`);
   }
 
-  parts.push(renderText(markdown.slice(lastIndex), sources));
-  return parts.join("");
+  return blocks.join("");
 }
 
 function renderCompareResult(compare = {}, sources = []) {
@@ -4153,48 +4245,259 @@ function formatResearchSiteStatus(site) {
   return site.snippet || "Queued";
 }
 
-function renderText(text, sources = []) {
-  return escapeHtml(text)
-    .split(/\n{2,}/)
-    .map((paragraph) => {
-      const trimmed = paragraph.trim();
-      if (!trimmed) return "";
+function renderInline(text, sources = []) {
+  const codeTokens = [];
+  const codeTokenPrefix = "\uE000CODE";
+  const codeTokenSuffix = "\uE001";
+  const withCodeTokens = String(text || "").replace(/`([^`\n]+)`/g, (_match, code) => {
+    const token = `${codeTokenPrefix}${codeTokens.length}${codeTokenSuffix}`;
+    codeTokens.push(`<code>${escapeHtml(code)}</code>`);
+    return token;
+  });
 
-      const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
-      if (heading) {
-        const level = heading[1].length + 1;
-        return `<h${level}>${renderInline(heading[2], sources)}</h${level}>`;
-      }
-
-      if (/^[-*] /m.test(trimmed)) {
-        const items = trimmed
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => `<li>${renderInline(line.replace(/^[-*]\s+/, ""), sources)}</li>`)
-          .join("");
-        return `<ul>${items}</ul>`;
-      }
-
-      if (/^\d+\. /m.test(trimmed)) {
-        const items = trimmed
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => `<li>${renderInline(line.replace(/^\d+\.\s+/, ""), sources)}</li>`)
-          .join("");
-        return `<ol>${items}</ol>`;
-      }
-
-      return `<p>${renderInline(trimmed, sources).replace(/\n/g, "<br>")}</p>`;
+  let html = escapeHtml(withCodeTokens);
+  html = html
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+(?:\s+"[^"]*")?)\)/g, (_match, label, rawUrl) => {
+      const url = sanitizeMarkdownUrl(rawUrl.replace(/\s+"[^"]*"$/, ""));
+      if (!url) return label;
+      return `<a class="markdown-link" href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${label}</a>`;
     })
-    .join("");
+    .replace(/\[\[(\d+)\]\]|\[(\d+)\]/g, (_match, doubleId, singleId) => renderCitationChip(Number(doubleId || singleId), sources))
+    .replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+)(?=$|[\s).,;!?])/g, (_match, prefix, rawUrl) => {
+      const cleanUrl = rawUrl.replace(/[.,;!?]+$/, "");
+      const trailing = rawUrl.slice(cleanUrl.length);
+      const safeUrl = sanitizeMarkdownUrl(cleanUrl);
+      if (!safeUrl) return `${prefix}${rawUrl}`;
+      return `${prefix}<a class="markdown-link" href="${escapeAttribute(safeUrl)}" target="_blank" rel="noreferrer">${cleanUrl}</a>${trailing}`;
+    })
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/~~([^~]+)~~/g, "<del>$1</del>")
+    .replace(/(^|[^\w])\*([^*\n]+)\*(?=[^\w]|$)/g, "$1<em>$2</em>")
+    .replace(/(^|[^\w])_([^_\n]+)_(?=[^\w]|$)/g, "$1<em>$2</em>");
+
+  return html.replace(new RegExp(`${codeTokenPrefix}(\\d+)${codeTokenSuffix}`, "g"), (_match, index) => codeTokens[Number(index)] || "");
 }
 
-function renderInline(text, sources = []) {
-  return text
-    .replace(/\[\[(\d+)\]\]|\[(\d+)\]/g, (_match, doubleId, singleId) => renderCitationChip(Number(doubleId || singleId), sources))
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\b_([^_]+)_\b/g, "<em>$1</em>");
+function isMarkdownBlockStart(lines, index) {
+  const line = lines[index] || "";
+  const trimmed = line.trim();
+  return Boolean(
+    trimmed.match(/^(```|~~~)\s*/) ||
+      /^#{1,6}\s+/.test(trimmed) ||
+      /^#{1,6}$|^\*{3,}$|^-{3,}$/.test(trimmed) ||
+      /^>\s?/.test(trimmed) ||
+      /^\s{0,3}[-*+]\s+/.test(line) ||
+      /^\s{0,3}\d+\.\s+/.test(line) ||
+      isMarkdownTableStart(lines, index)
+  );
+}
+
+function isMarkdownTableStart(lines, index) {
+  const current = lines[index] || "";
+  const next = lines[index + 1] || "";
+  return current.includes("|") && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(next);
+}
+
+function renderMarkdownTable(lines, sources = []) {
+  const header = splitMarkdownTableRow(lines[0]);
+  const alignments = splitMarkdownTableRow(lines[1]).map((cell) => {
+    if (/^:-+:$/.test(cell)) return "center";
+    if (/-+:$/.test(cell)) return "right";
+    return "left";
+  });
+  const rows = lines.slice(2).map(splitMarkdownTableRow).filter((row) => row.length > 0);
+  const headHtml = header
+    .map((cell, index) => `<th class="align-${alignments[index] || "left"}">${renderInline(cell, sources)}</th>`)
+    .join("");
+  const bodyHtml = rows
+    .map((row) => `<tr>${header.map((_cell, index) => `<td class="align-${alignments[index] || "left"}">${renderInline(row[index] || "", sources)}</td>`).join("")}</tr>`)
+    .join("");
+
+  return `<div class="markdown-table-wrap"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`;
+}
+
+function splitMarkdownTableRow(line) {
+  const cells = [];
+  let current = "";
+  let escaped = false;
+  const trimmed = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+
+  for (const char of trimmed) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "|") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function sanitizeMarkdownUrl(rawUrl) {
+  const url = String(rawUrl || "").trim().replace(/&amp;/g, "&");
+  if (/^(https?:|mailto:|tel:)/i.test(url)) return url;
+  if (/^#[a-zA-Z0-9_-]+$/.test(url)) return url;
+  return "";
+}
+
+function renderCodeBlock(code, language = "") {
+  const normalizedLanguage = normalizeCodeLanguage(language);
+  const languageLabel = normalizedLanguage || "text";
+  return `
+    <figure class="code-block language-${escapeAttribute(languageLabel)}">
+      <figcaption>
+        <span>${escapeHtml(languageLabel)}</span>
+      </figcaption>
+      <pre><code>${highlightCode(code, normalizedLanguage)}</code></pre>
+    </figure>
+  `;
+}
+
+function normalizeCodeLanguage(language) {
+  const value = String(language || "").trim().toLowerCase();
+  const aliases = {
+    cjs: "javascript",
+    js: "javascript",
+    jsx: "javascript",
+    mjs: "javascript",
+    ts: "typescript",
+    tsx: "typescript",
+    py: "python",
+    sh: "bash",
+    shell: "bash",
+    zsh: "bash",
+    yml: "yaml",
+    html: "markup",
+    xml: "markup",
+    svg: "markup",
+    md: "markdown"
+  };
+  return aliases[value] || value;
+}
+
+function highlightCode(code, language) {
+  const source = String(code || "").replace(/\n$/, "");
+  if (!language) return escapeHtml(source);
+
+  if (language === "json") {
+    return highlightWithRules(source, [
+      ["comment", /\/\/[^\n]*|\/\*[\s\S]*?\*\//y],
+      ["key", /"(?:\\.|[^"\\])*"(?=\s*:)/y],
+      ["string", /"(?:\\.|[^"\\])*"/y],
+      ["number", /-?\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/iy],
+      ["constant", /\b(?:true|false|null)\b/y],
+      ["punctuation", /[{}[\],:]/y]
+    ]);
+  }
+
+  if (language === "markup") {
+    return highlightMarkup(source);
+  }
+
+  if (language === "css") {
+    return highlightWithRules(source, [
+      ["comment", /\/\*[\s\S]*?\*\//y],
+      ["string", /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/y],
+      ["property", /--?[a-zA-Z-]+(?=\s*:)/y],
+      ["keyword", /#[0-9a-fA-F]{3,8}\b|\b(?:auto|none|solid|grid|flex|block|inline|relative|absolute|fixed|sticky|inherit|initial|unset|var|calc|rgba?|hsla?)\b/y],
+      ["number", /-?\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw|s|ms|deg)?\b/y],
+      ["selector", /[.#]?[a-zA-Z_][\w-]*(?=[\s,{.#:[>+~])/y],
+      ["punctuation", /[{}()[\]:;,.>+~*=|]/y]
+    ]);
+  }
+
+  if (language === "python") {
+    return highlightWithRules(source, [
+      ["comment", /#[^\n]*/y],
+      ["string", /(?:[rubf]{0,2})("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/iy],
+      ["keyword", /\b(?:and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield)\b/y],
+      ["constant", /\b(?:False|None|True|self|cls)\b/y],
+      ["number", /-?\b\d+(?:\.\d+)?\b/y],
+      ["function", /\b[a-zA-Z_]\w*(?=\s*\()/y],
+      ["operator", /[-+*/%=<>!&|^~]+/y],
+      ["punctuation", /[{}()[\].,:;]/y]
+    ]);
+  }
+
+  if (language === "bash") {
+    return highlightWithRules(source, [
+      ["comment", /#[^\n]*/y],
+      ["string", /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/y],
+      ["variable", /\$[a-zA-Z_]\w*|\$\{[^}]+\}/y],
+      ["keyword", /\b(?:case|do|done|elif|else|esac|fi|for|function|if|in|select|then|until|while|export|local|readonly|return|set|unset)\b/y],
+      ["number", /-?\b\d+(?:\.\d+)?\b/y],
+      ["operator", /&&|\|\||[|&;<>!$(){}[\]=]/y]
+    ]);
+  }
+
+  if (language === "markdown") {
+    return highlightWithRules(source, [
+      ["comment", /<!--[\s\S]*?-->/y],
+      ["keyword", /^#{1,6}.*/my],
+      ["string", /\[[^\]]+\]\([^)]+\)/y],
+      ["operator", /[*_~`>#-]+/y]
+    ]);
+  }
+
+  return highlightWithRules(source, [
+    ["comment", /\/\/[^\n]*|\/\*[\s\S]*?\*\//y],
+    ["string", /`(?:\\[\s\S]|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/y],
+    ["keyword", /\b(?:abstract|async|await|boolean|break|case|catch|class|const|constructor|continue|debugger|default|delete|do|else|enum|export|extends|finally|for|from|function|get|if|implements|import|in|instanceof|interface|let|new|null|of|private|protected|public|return|set|static|super|switch|this|throw|try|type|typeof|undefined|var|void|while|with|yield)\b/y],
+    ["constant", /\b(?:true|false|NaN|Infinity)\b/y],
+    ["number", /-?\b(?:0x[\da-f]+|\d+(?:\.\d+)?)\b/iy],
+    ["function", /\b[$A-Z_a-z][$\w]*(?=\s*\()/y],
+    ["operator", /=>|===|!==|==|!=|<=|>=|\+\+|--|&&|\|\||[+\-*/%=&|^~!?<>]/y],
+    ["punctuation", /[{}()[\].,;:]/y]
+  ]);
+}
+
+function highlightWithRules(source, rules) {
+  let html = "";
+  let index = 0;
+
+  while (index < source.length) {
+    let matched = null;
+    for (const [className, pattern] of rules) {
+      pattern.lastIndex = index;
+      const match = pattern.exec(source);
+      if (match && match.index === index) {
+        matched = { className, text: match[0] };
+        break;
+      }
+    }
+
+    if (matched) {
+      html += `<span class="tok-${matched.className}">${escapeHtml(matched.text)}</span>`;
+      index += matched.text.length;
+    } else {
+      html += escapeHtml(source[index]);
+      index += 1;
+    }
+  }
+
+  return html;
+}
+
+function highlightMarkup(source) {
+  const escaped = escapeHtml(source);
+  return escaped.replace(/(&lt;\/?)([a-zA-Z][\w:-]*)([\s\S]*?)(&gt;)/g, (_match, open, tag, attrs, close) => {
+    const attrHtml = attrs.replace(/([:\w-]+)(=)(&quot;.*?&quot;|&#039;.*?&#039;|[^\s&]+)/g, (_attrMatch, name, equals, value) => (
+      `<span class="tok-attr">${name}</span>${equals}<span class="tok-string">${value}</span>`
+    ));
+    return `<span class="tok-punctuation">${open}</span><span class="tok-keyword">${tag}</span>${attrHtml}<span class="tok-punctuation">${close}</span>`;
+  });
 }
 
 function renderCitationChip(index, sources) {
