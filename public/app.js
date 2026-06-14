@@ -1578,18 +1578,26 @@ function collectResearchSources(research) {
 function buildResearchReportHtml(prompt, reportMarkdown, sources) {
   const report = prepareResearchReport(prompt, reportMarkdown);
   const theme = getResearchReportTheme(prompt, reportMarkdown);
+  const tocItems = extractReportToc(report.bodyMarkdown);
+  const readingTime = getReportReadingTime(report.bodyMarkdown);
   const sourceList = sources
-    .map((source) => `<li id="source-${source.citationId}">
-      <div class="source-number">${source.citationId}</div>
-      <div>
-        <a href="${escapeAttribute(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.title || source.url)}</a>
-        <p>${escapeHtml(source.snippet || getSourceHost(source.url) || source.url)}</p>
-      </div>
+    .map((source) => `<li id="source-${source.citationId}" class="source-card">
+      <a href="${escapeAttribute(source.url)}" target="_blank" rel="noreferrer">
+        <span class="source-number">${source.citationId}</span>
+        <span class="source-copy">
+          <span class="source-title">${escapeHtml(source.title || source.url)}</span>
+          <span class="source-host">${escapeHtml(getSourceHost(source.url) || source.url)}</span>
+          <span class="source-snippet">${escapeHtml(source.snippet || "Source indexed during research.")}</span>
+        </span>
+      </a>
     </li>`)
     .join("");
+  const tocHtml = tocItems.length
+    ? tocItems.map((item) => `<a class="toc-link level-${item.level}" href="#${escapeAttribute(item.id)}">${escapeHtml(item.title)}</a>`).join("")
+    : `<span class="toc-empty">No section headings found.</span>`;
   const sourceCount = sources.length === 1 ? "1 source" : `${sources.length} sources`;
-  const generatedAt = new Date().toLocaleString();
-  const styleVars = `--report-ink: ${theme.ink}; --report-muted: ${theme.muted}; --report-line: ${theme.line}; --report-paper: ${theme.paper}; --report-wash: ${theme.wash}; --report-panel: ${theme.panel}; --report-accent: ${theme.accent}; --report-accent-soft: ${theme.accentSoft};`;
+  const generatedAt = formatReportDate(new Date());
+  const styleVars = `--accent: ${theme.accent}; --accent-soft: ${theme.accentSoft}; --theme-label: "${theme.label}";`;
 
   return `<!doctype html>
 <html lang="en">
@@ -1598,120 +1606,288 @@ function buildResearchReportHtml(prompt, reportMarkdown, sources) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${escapeHtml(report.title)}</title>
   <style>
-    :root { color-scheme: light; ${styleVars} }
+    :root {
+      color-scheme: dark;
+      ${styleVars}
+      --bg: #0c0d0d;
+      --bg-soft: #111414;
+      --surface: rgba(20, 22, 22, 0.78);
+      --surface-strong: rgba(26, 29, 29, 0.92);
+      --surface-glass: rgba(14, 15, 15, 0.66);
+      --ink: #f4f1e8;
+      --muted: #aaa79d;
+      --dim: #74736d;
+      --line: rgba(244, 241, 232, 0.11);
+      --line-strong: rgba(244, 241, 232, 0.18);
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+    }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
     body {
       margin: 0;
-      color: var(--report-ink);
+      min-height: 100vh;
+      color: var(--ink);
       background:
-        linear-gradient(180deg, var(--report-wash) 0, var(--report-paper) 420px),
-        var(--report-paper);
+        radial-gradient(circle at 18% 12%, color-mix(in srgb, var(--accent), transparent 78%), transparent 28rem),
+        radial-gradient(circle at 86% 72%, color-mix(in srgb, var(--accent), transparent 86%), transparent 34rem),
+        linear-gradient(180deg, #111414 0%, #080909 100%);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.62;
+      line-height: 1.7;
+    }
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      content: "";
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 70%);
+      pointer-events: none;
+    }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: center;
+      min-height: 64px;
+      padding: 0 28px;
+      background: rgba(8, 9, 9, 0.72);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(18px);
+    }
+    .topbar-title {
+      overflow: hidden;
+      color: var(--ink);
+      font-size: 0.92rem;
+      font-weight: 760;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .actions {
+      display: inline-flex;
+      gap: 10px;
+      flex: 0 0 auto;
+    }
+    button,
+    .action-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 38px;
+      padding: 0 13px;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.84rem;
+      font-weight: 720;
+      text-decoration: none;
+    }
+    button:hover,
+    .action-link:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: color-mix(in srgb, var(--accent), white 12%);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) minmax(0, 920px);
+      gap: clamp(28px, 5vw, 72px);
+      width: min(1320px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 42px 0 92px;
+    }
+    .sidebar {
+      position: sticky;
+      top: 92px;
+      align-self: start;
+      display: grid;
+      gap: 22px;
+      min-height: calc(100vh - 124px);
+      padding-right: 22px;
+      border-right: 1px solid var(--line);
+    }
+    .brand-block {
+      display: grid;
+      gap: 10px;
+      padding: 16px;
+      background: var(--surface-glass);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      color: #0d1110;
+      background: var(--accent-soft);
+      border-radius: 12px;
+      font-weight: 900;
+    }
+    .brand-label {
+      color: var(--muted);
+      font-size: 0.74rem;
+      font-weight: 780;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    .toc {
+      display: grid;
+      gap: 4px;
+      padding: 4px 0;
+    }
+    .toc-title {
+      margin-bottom: 8px;
+      color: var(--dim);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .toc-link,
+    .toc-empty {
+      display: block;
+      padding: 8px 12px;
+      color: var(--muted);
+      border-left: 2px solid transparent;
+      border-radius: 0 10px 10px 0;
+      font-size: 0.88rem;
+      line-height: 1.35;
+      text-decoration: none;
+    }
+    .toc-link.level-3 { padding-left: 24px; font-size: 0.82rem; }
+    .toc-link.level-4 { padding-left: 34px; font-size: 0.8rem; }
+    .toc-link:hover,
+    .toc-link.active {
+      color: var(--ink);
+      background: color-mix(in srgb, var(--accent), transparent 86%);
+      border-left-color: var(--accent);
+    }
+    .toc-empty {
+      color: var(--dim);
     }
     main {
-      width: min(1120px, calc(100% - 40px));
-      margin: 0 auto;
-      padding: 56px 0 82px;
+      min-width: 0;
     }
     .cover {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 250px;
-      gap: 44px;
-      align-items: end;
-      min-height: 300px;
-      padding: 46px;
-      color: #fff;
+      gap: 38px;
+      min-height: 390px;
+      padding: clamp(30px, 6vw, 64px);
       background:
-        linear-gradient(135deg, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.02)),
-        var(--report-accent);
-      border-radius: 3px;
-      box-shadow: 0 24px 70px rgba(24, 30, 36, 0.18);
+        linear-gradient(135deg, color-mix(in srgb, var(--accent), black 35%), rgba(22, 24, 24, 0.8)),
+        var(--surface-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
     }
     .eyebrow {
-      margin-bottom: 18px;
-      color: rgba(255, 255, 255, 0.72);
-      font-size: 0.74rem;
-      font-weight: 760;
-      letter-spacing: 0.14em;
+      margin-bottom: 22px;
+      color: color-mix(in srgb, var(--accent-soft), white 20%);
+      font-size: 0.76rem;
+      font-weight: 820;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
     }
     h1 {
       margin: 0;
-      max-width: 760px;
+      max-width: 830px;
       font-family: Georgia, "Times New Roman", serif;
-      font-size: clamp(2.35rem, 6vw, 5.2rem);
+      font-size: clamp(2.65rem, 7vw, 6.4rem);
       font-weight: 500;
       letter-spacing: 0;
-      line-height: 0.98;
+      line-height: 0.94;
     }
-    .cover-aside {
+    .meta-grid {
       display: grid;
-      gap: 16px;
-      color: rgba(255, 255, 255, 0.72);
-      font-size: 0.9rem;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
     }
     .meta-item {
-      padding-top: 12px;
-      border-top: 1px solid rgba(255, 255, 255, 0.22);
+      min-height: 88px;
+      padding: 14px;
+      background: rgba(0, 0, 0, 0.18);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
     }
     .meta-label {
       display: block;
-      margin-bottom: 4px;
-      color: rgba(255, 255, 255, 0.48);
+      margin-bottom: 8px;
+      color: rgba(255, 255, 255, 0.46);
       font-size: 0.7rem;
-      font-weight: 760;
-      letter-spacing: 0.12em;
+      font-weight: 820;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
     }
-    .report-frame {
-      display: grid;
-      grid-template-columns: 230px minmax(0, 1fr);
-      gap: 44px;
-      align-items: start;
-      margin-top: 36px;
-    }
-    .report-rail {
-      position: sticky;
-      top: 24px;
-      display: grid;
-      gap: 18px;
-      padding: 22px 0;
-      color: var(--report-muted);
-      border-top: 2px solid var(--report-accent);
-    }
-    .rail-title {
-      color: var(--report-ink);
-      font-weight: 760;
-    }
-    .rail-text {
-      margin: 0;
+    .meta-value {
+      color: rgba(255, 255, 255, 0.82);
       font-size: 0.92rem;
+      overflow-wrap: anywhere;
+    }
+    .article-shell {
+      margin-top: 34px;
+      padding: clamp(24px, 4vw, 50px);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+    }
+    .analyst-note {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 36px;
+      padding: 18px 20px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+    .analyst-note strong {
+      color: var(--ink);
+      font-size: 0.94rem;
+    }
+    .analyst-note p {
+      margin: 0;
+      max-width: 760px;
     }
     article {
       min-width: 0;
-      padding: 8px 0 0;
-      font-size: 1.02rem;
+      color: #e9e6dd;
+      font-size: clamp(1rem, 1.4vw, 1.14rem);
     }
     article > *:first-child {
       margin-top: 0;
     }
     h2 {
-      margin: 2.2em 0 0.65em;
-      padding-top: 0.9em;
-      color: var(--report-ink);
-      border-top: 1px solid var(--report-line);
+      scroll-margin-top: 92px;
+      margin: 2.6em 0 0.72em;
+      color: var(--ink);
       font-family: Georgia, "Times New Roman", serif;
-      font-size: clamp(1.7rem, 3vw, 2.45rem);
+      font-size: clamp(1.85rem, 3vw, 2.7rem);
       font-weight: 520;
       line-height: 1.1;
     }
     h3 {
+      scroll-margin-top: 92px;
       margin: 1.7em 0 0.5em;
-      color: var(--report-ink);
-      font-size: 1.12rem;
+      color: var(--ink);
+      font-size: 1.22rem;
       line-height: 1.24;
+    }
+    h4 {
+      scroll-margin-top: 92px;
+      margin: 1.4em 0 0.45em;
+      color: var(--ink);
+      font-size: 1rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }
     p {
       margin: 0 0 1.05em;
@@ -1724,43 +1900,49 @@ function buildResearchReportHtml(prompt, reportMarkdown, sources) {
     }
     blockquote {
       margin: 1.5em 0;
-      padding: 0.8em 1.1em;
-      color: var(--report-muted);
-      background: var(--report-panel);
-      border-left: 4px solid var(--report-accent);
+      padding: 1em 1.2em;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.045);
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--accent);
+      border-radius: 0 14px 14px 0;
     }
     table {
       width: 100%;
       margin: 1.4em 0;
       border-collapse: collapse;
-      background: #fff;
-      border: 1px solid var(--report-line);
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
       font-size: 0.94rem;
     }
     th, td {
       padding: 11px 12px;
-      border-bottom: 1px solid var(--report-line);
+      border-bottom: 1px solid var(--line);
       text-align: left;
       vertical-align: top;
     }
     th {
-      color: var(--report-ink);
-      background: var(--report-panel);
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.06);
       font-size: 0.76rem;
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
     code {
       padding: 0.1em 0.3em;
-      background: var(--report-panel);
+      color: #f4d6a1;
+      background: rgba(255, 255, 255, 0.08);
       border-radius: 4px;
     }
     pre {
       overflow: auto;
       padding: 16px;
-      color: #fffaf3;
-      background: #20242b;
-      border-radius: 3px;
+      color: #f2efe8;
+      background: #11161b;
+      border: 1px solid var(--line);
+      border-radius: 12px;
     }
     sup.endnote-ref {
       margin-left: 0.1em;
@@ -1768,94 +1950,245 @@ function buildResearchReportHtml(prompt, reportMarkdown, sources) {
       line-height: 0;
     }
     sup.endnote-ref a {
-      color: var(--report-accent);
+      color: var(--accent-soft);
       text-decoration: none;
     }
     .sources {
-      margin-top: 58px;
-      padding-top: 30px;
-      border-top: 2px solid var(--report-accent);
+      margin-top: 34px;
+      padding: clamp(24px, 4vw, 44px);
+      background: rgba(255, 255, 255, 0.045);
+      border: 1px solid var(--line);
+      border-radius: 20px;
     }
     .sources h2 {
       margin-top: 0;
       padding-top: 0;
       border-top: 0;
-      font-size: 1.9rem;
+      font-size: 2.1rem;
     }
     .source-list {
       display: grid;
-      gap: 16px;
+      gap: 10px;
       margin: 0;
       padding: 0;
       list-style: none;
     }
-    .source-list li {
-      display: grid;
-      grid-template-columns: 38px minmax(0, 1fr);
-      gap: 14px;
+    .source-card {
       margin: 0;
-      padding-top: 14px;
-      border-top: 1px solid var(--report-line);
+    }
+    .source-card a {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 14px;
+      padding: 14px;
+      color: inherit;
+      background: rgba(0, 0, 0, 0.18);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      text-decoration: none;
+    }
+    .source-card a:hover {
+      border-color: color-mix(in srgb, var(--accent), white 8%);
+      background: rgba(255, 255, 255, 0.06);
     }
     .source-number {
-      color: var(--report-accent);
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      color: #0d1110;
+      background: var(--accent-soft);
+      border-radius: 999px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
       font-weight: 760;
       font-variant-numeric: tabular-nums;
     }
-    .sources p {
-      margin: 4px 0 0;
-      color: var(--report-muted);
+    .source-copy {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+    .source-title {
+      color: var(--ink);
+      font-weight: 760;
+    }
+    .source-host,
+    .source-snippet {
+      color: var(--muted);
       font-size: 0.9rem;
     }
+    .source-snippet {
+      overflow-wrap: anywhere;
+    }
     a {
-      color: var(--report-accent);
+      color: var(--accent-soft);
       text-decoration-thickness: 1px;
       text-underline-offset: 0.16em;
     }
-    @media (max-width: 840px) {
-      main { width: min(100% - 28px, 1120px); padding-top: 24px; }
-      .cover { grid-template-columns: 1fr; min-height: auto; padding: 28px; }
-      .report-frame { grid-template-columns: 1fr; gap: 18px; }
-      .report-rail { position: static; padding-bottom: 0; }
+    @media (max-width: 980px) {
+      .topbar { padding: 0 16px; }
+      .layout { grid-template-columns: 1fr; width: min(100% - 28px, 920px); padding-top: 24px; }
+      .sidebar { position: static; min-height: auto; padding-right: 0; border-right: 0; }
+      .toc { display: none; }
+      .cover { min-height: auto; }
+      .meta-grid { grid-template-columns: 1fr; }
+      .topbar-title { max-width: 52vw; }
     }
     @media print {
-      body { background: #fff; }
-      main { width: 100%; padding: 0; }
-      .cover { box-shadow: none; border-radius: 0; }
-      .report-frame { display: block; }
-      .report-rail { display: none; }
+      :root { color-scheme: light; --bg: #fff; --ink: #111; --muted: #555; --line: #ddd; }
+      body { color: #111; background: #fff; }
+      .topbar, .sidebar { display: none; }
+      .layout { display: block; width: 100%; padding: 0; }
+      .cover, .article-shell, .sources { color: #111; background: #fff; box-shadow: none; border: 0; border-radius: 0; }
+      .meta-item, .analyst-note, .source-card a { background: #fff; border-color: #ddd; }
+      .meta-label, .meta-value, .source-title, .source-host, .source-snippet, article { color: #111; }
       a { color: inherit; }
     }
   </style>
 </head>
 <body>
-  <main>
-    <header class="cover">
+  <div class="topbar">
+    <div class="topbar-title">${escapeHtml(report.title)}</div>
+    <div class="actions">
+      <button type="button" id="printButton">Export PDF</button>
+      <a class="action-link" href="#sources">Sources</a>
+    </div>
+  </div>
+  <div class="layout">
+    <aside class="sidebar" aria-label="Report navigation">
+      <div class="brand-block">
+        <div class="brand-mark">O</div>
+        <div>
+          <div class="brand-label">${escapeHtml(theme.label)}</div>
+          <strong>Research report</strong>
+        </div>
+      </div>
+      <nav class="toc" aria-label="Sections">
+        <div class="toc-title">Contents</div>
+        ${tocHtml}
+      </nav>
+    </aside>
+    <main>
+      <header class="cover">
       <div>
         <div class="eyebrow">${escapeHtml(theme.label)} · Research report</div>
         <h1>${escapeHtml(report.title)}</h1>
       </div>
-      <aside class="cover-aside" aria-label="Report metadata">
-        <div class="meta-item"><span class="meta-label">Generated</span>${escapeHtml(generatedAt)}</div>
-        <div class="meta-item"><span class="meta-label">Evidence base</span>${escapeHtml(sourceCount)}</div>
-        <div class="meta-item"><span class="meta-label">Question</span>${escapeHtml(prompt)}</div>
-      </aside>
-    </header>
-    <div class="report-frame">
-      <aside class="report-rail">
-        <div class="rail-title">Analyst note</div>
-        <p class="rail-text">Findings are synthesized from the cited source set and should be read with the evidence limits and open questions noted in the report.</p>
-      </aside>
-      <article>${renderReportMarkdown(report.bodyMarkdown)}</article>
-    </div>
-    <section class="sources">
-      <h2>Sources</h2>
-      <ol class="source-list">${sourceList || '<li><div class="source-number">0</div><div>No external sources were saved for this report.</div></li>'}</ol>
-    </section>
-  </main>
+      <div class="meta-grid" aria-label="Report metadata">
+        <div class="meta-item"><span class="meta-label">Generated</span><span class="meta-value">${escapeHtml(generatedAt)}</span></div>
+        <div class="meta-item"><span class="meta-label">Evidence base</span><span class="meta-value">${escapeHtml(sourceCount)}</span></div>
+        <div class="meta-item"><span class="meta-label">Read time</span><span class="meta-value">${escapeHtml(readingTime)}</span></div>
+      </div>
+      </header>
+      <section class="article-shell">
+        <div class="analyst-note">
+          <strong>Analyst note</strong>
+          <p>Findings are synthesized from the cited source set and should be read with the evidence limits and open questions noted in the report.</p>
+          <p><strong>Research question:</strong> ${escapeHtml(prompt)}</p>
+        </div>
+        <article>${renderReportMarkdown(report.bodyMarkdown)}</article>
+      </section>
+      <section class="sources" id="sources">
+        <h2>Sources</h2>
+        <ol class="source-list">${sourceList || '<li class="source-card"><a><span class="source-number">0</span><span class="source-copy"><span class="source-title">No external sources were saved for this report.</span></span></a></li>'}</ol>
+      </section>
+    </main>
+  </div>
+  <script>
+    document.getElementById("printButton")?.addEventListener("click", () => window.print());
+    const links = [...document.querySelectorAll(".toc-link")];
+    const headings = links
+      .map((link) => document.getElementById(link.getAttribute("href").slice(1)))
+      .filter(Boolean);
+    const setActive = (id) => {
+      for (const link of links) {
+        link.classList.toggle("active", link.getAttribute("href") === "#" + id);
+      }
+    };
+    if (headings.length) {
+      const observer = new IntersectionObserver((entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        if (visible?.target?.id) setActive(visible.target.id);
+      }, { rootMargin: "-20% 0px -68% 0px", threshold: 0 });
+      headings.forEach((heading) => observer.observe(heading));
+      setActive(headings[0].id);
+    }
+  </script>
 </body>
 </html>`;
+}
+
+function extractReportToc(markdown) {
+  const slugger = createReportSlugger();
+  const toc = [];
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  let inFence = false;
+  let fenceMarker = "";
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const fence = trimmed.match(/^(```|~~~)/);
+    if (fence) {
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = fence[1];
+      } else if (trimmed.startsWith(fenceMarker)) {
+        inFence = false;
+        fenceMarker = "";
+      }
+      continue;
+    }
+
+    if (inFence) continue;
+
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (!heading) continue;
+    const title = cleanMarkdownInline(heading[2]);
+    if (!title || isBadReportTitle(title)) continue;
+    toc.push({
+      id: slugger(title),
+      level: Math.min(Math.max(2, heading[1].length), 4),
+      title
+    });
+  }
+
+  return toc.slice(0, 18);
+}
+
+function createReportSlugger() {
+  const seen = new Map();
+  return (title) => {
+    const base = makeReportSlug(title);
+    const count = seen.get(base) || 0;
+    seen.set(base, count + 1);
+    return count === 0 ? base : `${base}-${count + 1}`;
+  };
+}
+
+function makeReportSlug(title) {
+  const slug = String(title || "")
+    .toLowerCase()
+    .replace(/&amp;/g, "and")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+  return slug || `section-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function getReportReadingTime(markdown) {
+  const words = String(markdown || "").trim().split(/\s+/).filter(Boolean).length;
+  const minutes = Math.max(1, Math.round(words / 220));
+  return `${minutes} min read`;
+}
+
+function formatReportDate(date) {
+  return date.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
 }
 
 function prepareResearchReport(prompt, reportMarkdown) {
@@ -2016,20 +2349,21 @@ function renderReportMarkdown(markdown) {
 
   const parts = [];
   const codeBlockPattern = /```([\w-]*)\n?([\s\S]*?)```/g;
+  const slugger = createReportSlugger();
   let lastIndex = 0;
   let match;
 
   while ((match = codeBlockPattern.exec(markdown)) !== null) {
-    parts.push(renderReportText(markdown.slice(lastIndex, match.index)));
+    parts.push(renderReportText(markdown.slice(lastIndex, match.index), slugger));
     parts.push(`<pre><code>${escapeHtml(match[2])}</code></pre>`);
     lastIndex = match.index + match[0].length;
   }
 
-  parts.push(renderReportText(markdown.slice(lastIndex)));
+  parts.push(renderReportText(markdown.slice(lastIndex), slugger));
   return parts.join("");
 }
 
-function renderReportText(text) {
+function renderReportText(text, slugger = createReportSlugger()) {
   const lines = String(text || "").split("\n");
   const blocks = [];
   let index = 0;
@@ -2048,10 +2382,12 @@ function renderReportText(text) {
       continue;
     }
 
-    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
     if (heading) {
-      const level = Math.min(heading[1].length + 1, 3);
-      blocks.push(`<h${level}>${renderReportInline(heading[2])}</h${level}>`);
+      const title = cleanMarkdownInline(heading[2]);
+      const level = Math.min(Math.max(2, heading[1].length), 4);
+      const id = slugger(title);
+      blocks.push(`<h${level} id="${escapeAttribute(id)}">${renderReportInline(heading[2])}</h${level}>`);
       index += 1;
       continue;
     }
@@ -2101,7 +2437,7 @@ function renderReportText(text) {
     while (
       index < lines.length &&
       lines[index].trim() &&
-      !/^(#{1,3})\s+/.test(lines[index].trim()) &&
+      !/^(#{1,4})\s+/.test(lines[index].trim()) &&
       !/^[-*]\s+/.test(lines[index].trim()) &&
       !/^\d+\.\s+/.test(lines[index].trim()) &&
       !/^>\s?/.test(lines[index].trim()) &&
