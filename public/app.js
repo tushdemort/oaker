@@ -431,8 +431,10 @@ async function sendDeepResearchMessage(prompt, model) {
 }
 
 function createResearchState(prompt) {
+  const question = extractResearchQuestion(prompt);
   return {
     prompt,
+    question,
     status: "running",
     startedAt: Date.now(),
     finishedAt: 0,
@@ -445,9 +447,11 @@ function createResearchState(prompt) {
 
 async function runDeepResearch(prompt, model, assistantMessage, conversation, signal) {
   const research = assistantMessage.research;
+  const researchQuestion = research.question || extractResearchQuestion(prompt);
+  research.question = researchQuestion;
   const notes = [];
   const sourceByUrl = new Map();
-  let query = prompt;
+  let query = buildInitialResearchQuery(researchQuestion);
   let nextCitationId = 1;
 
   for (let turnNumber = 1; turnNumber <= DEEP_RESEARCH_MAX_TURNS; turnNumber += 1) {
@@ -510,7 +514,7 @@ async function runDeepResearch(prompt, model, assistantMessage, conversation, si
     updateResearchProgress(assistantMessage, conversation);
     setConnection("checking", `Research turn ${turnNumber}`, "Synthesizing findings");
 
-    turn.summary = await summarizeResearchTurn(prompt, turn, notes, model, signal);
+    turn.summary = await summarizeResearchTurn(researchQuestion, turn, notes, model, signal);
     notes.push({ turn: turn.number, query: turn.query, summary: turn.summary });
     turn.status = "done";
 
@@ -518,7 +522,7 @@ async function runDeepResearch(prompt, model, assistantMessage, conversation, si
       break;
     }
 
-    const nextQuery = await chooseNextResearchQuery(prompt, notes, turnNumber, model, signal);
+    const nextQuery = await chooseNextResearchQuery(researchQuestion, notes, turnNumber, model, signal);
     turn.nextQuery = nextQuery;
     updateResearchProgress(assistantMessage, conversation);
 
@@ -526,7 +530,7 @@ async function runDeepResearch(prompt, model, assistantMessage, conversation, si
       break;
     }
 
-    query = nextQuery || `${prompt} deeper evidence examples analysis`;
+    query = nextQuery || buildFallbackResearchQuery(researchQuestion, notes);
   }
 
   research.status = "writing";
@@ -534,14 +538,20 @@ async function runDeepResearch(prompt, model, assistantMessage, conversation, si
   setConnection("checking", "Writing report", "Generating local website");
 
   const sources = collectResearchSources(research);
-  const reportMarkdown = await writeResearchReport(prompt, notes, sources, model, signal);
-  const reportHtml = buildResearchReportHtml(prompt, reportMarkdown, sources);
+  let reportMarkdown = await writeResearchReport(researchQuestion, notes, sources, model, signal);
+  if (isWeakResearchReport(reportMarkdown)) {
+    reportMarkdown = await repairResearchReport(researchQuestion, notes, sources, reportMarkdown, model, signal);
+  }
+  if (isWeakResearchReport(reportMarkdown)) {
+    reportMarkdown = buildFallbackResearchReport(researchQuestion, notes, sources);
+  }
+  const reportHtml = buildResearchReportHtml(researchQuestion, reportMarkdown, sources);
   const savedReport = await saveResearchReportHtml(reportHtml, signal);
 
   research.status = "complete";
   research.finishedAt = Date.now();
   research.reportUrl = savedReport.url;
-  research.reportTitle = `Deep research report: ${prompt}`;
+  research.reportTitle = `Deep research report: ${researchQuestion}`;
   assistantMessage.content = `Deep research complete.\n\n[Open the report](${savedReport.url})`;
   setConnection("online", "Deep research complete", savedReport.url);
   updateResearchProgress(assistantMessage, conversation);
@@ -565,6 +575,69 @@ async function fetchResearchPage(url, signal) {
     throw new Error(error || "Unable to read page.");
   }
   return response.json();
+}
+
+function extractResearchQuestion(prompt) {
+  const text = String(prompt || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "Research report";
+
+  const labeledPatterns = [
+    /\b(?:research question|question|topic|subject|objective|interaction|task)\s*:\s*([^*#]{36,260})/i,
+    /\b(?:discuss|analyze|assess|evaluate|explain|investigate)\s+([^*#]{36,260})/i
+  ];
+
+  for (const pattern of labeledPatterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      return cleanResearchQuestion(match[1]);
+    }
+  }
+
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length >= 36 && sentence.length <= 280);
+  const scored = sentences
+    .map((sentence) => ({ sentence, score: scoreResearchSentence(sentence) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored[0]) {
+    return cleanResearchQuestion(scored[0].sentence);
+  }
+
+  return cleanResearchQuestion(text.slice(0, 220));
+}
+
+function scoreResearchSentence(sentence) {
+  const lower = sentence.toLowerCase();
+  let score = 0;
+  if (/\b(discuss|analyze|assess|evaluate|explain|investigate|relationship|impact|history|decline|future|policy|governance|market|climate|ozone)\b/.test(lower)) score += 4;
+  if (/\b(role|you are|formatting|style guide|citations|source required|tone|avoid|length|h2|h3|placeholder)\b/.test(lower)) score -= 5;
+  if (sentence.length > 80) score += 1;
+  if (sentence.length > 200) score -= 1;
+  return score;
+}
+
+function cleanResearchQuestion(value) {
+  return String(value || "")
+    .replace(/\b(Part\s+\d+\s*:\s*)/gi, "")
+    .replace(/\*\*[^:]{0,36}:\s*/g, "")
+    .replace(/\[[^\]]*source[^\]]*\]/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/^[:"'\s-]+|[:"'\s-]+$/g, "")
+    .slice(0, 220)
+    .trim() || "Research report";
+}
+
+function buildInitialResearchQuery(question) {
+  return cleanResearchQuestion(question)
+    .replace(/\b(comprehensive|massive|extensive|report|write|writing|publication|formal|objective)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
 }
 
 async function summarizeResearchTurn(prompt, turn, priorNotes, model, signal) {
@@ -682,6 +755,51 @@ async function writeResearchReport(prompt, notes, sources, model, signal) {
     ],
     signal
   );
+}
+
+async function repairResearchReport(prompt, notes, sources, failedDraft, model, signal) {
+  return askModelOnce(
+    model,
+    [
+      ...getResearchBaseMessages(),
+      {
+        role: "user",
+        content: `The previous report draft was unusable or nearly empty:\n\n${String(failedDraft || "").slice(0, 1200)}\n\nWrite the full report again from the research notes below. Do not echo role instructions. Do not output only a title or # marker.\n\nResearch question: ${prompt}\n\nTurn notes:\n${notes.map((note) => `Turn ${note.turn}, query "${note.query}":\n${note.summary}`).join("\n\n")}\n\nSources:\n${sources.map((source) => `[[${source.citationId}]] ${source.title}\n${source.url}\n${source.snippet || ""}`).join("\n\n")}\n\nReturn a substantial Markdown report with one H1 title and detailed sections. Use citations like [[number]] where supported by sources.`
+      }
+    ],
+    signal
+  );
+}
+
+function isWeakResearchReport(markdown) {
+  const cleaned = stripReportBoilerplate(String(markdown || ""))
+    .replace(/\[[\[\d\]]+\]/g, " ")
+    .replace(/[#*_`>|-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const wordCount = cleaned ? cleaned.split(/\s+/).length : 0;
+  const raw = String(markdown || "").trim();
+
+  return (
+    wordCount < 220 ||
+    /^#{1,3}\s*$/.test(raw) ||
+    /^#\s*role\s*:/i.test(raw) ||
+    /\bsource required\b/i.test(raw) ||
+    /\bplaceholder citations\b/i.test(raw)
+  );
+}
+
+function buildFallbackResearchReport(prompt, notes, sources) {
+  const sourceIds = sources.slice(0, 8).map((source) => `[[${source.citationId}]]`).join(" ");
+  const noteSections = notes.map((note) => {
+    const summary = String(note.summary || "No summary was generated for this turn.").trim();
+    return `### Workstream ${note.turn}: ${note.query}\n\n${summary}`;
+  }).join("\n\n");
+  const sourceRows = sources.slice(0, 20)
+    .map((source) => `| [[${source.citationId}]] | ${source.title || source.url} | ${getSourceHost(source.url) || source.url} | ${source.snippet || "No snippet saved."} |`)
+    .join("\n");
+
+  return `# ${makeReportTitle(prompt)}\n\n## Executive Summary\n\nThe research run collected evidence from ${sources.length} source${sources.length === 1 ? "" : "s"} across ${notes.length} research turn${notes.length === 1 ? "" : "s"}. The model-generated final synthesis was unusable, so this fallback report preserves the collected analyst notes instead of discarding the work. Key evidence references include ${sourceIds || "the saved source list below"}.\n\n## Evidence Base And Method\n\nThe research process searched the web iteratively, read available page extracts, and summarized each turn into findings, evidence quality, contradictions, implications, and follow-up angles. The sections below preserve those turn-level notes so the evidence gathered during the run remains usable.\n\n## Findings By Research Workstream\n\n${noteSections || "No turn notes were generated."}\n\n## Source Inventory\n\n| Ref | Source | Host | Snippet |\n|---|---|---|---|\n${sourceRows || "| N/A | No sources saved | N/A | N/A |"}\n\n## Conclusion\n\nThe collected notes above should be treated as the durable output of this run. For a polished final narrative, rerun the final synthesis once the selected local model is responding reliably, or switch to a stronger local model for the report-writing step.`;
 }
 
 async function askModelOnce(model, messages, signal) {
@@ -1036,13 +1154,22 @@ function buildResearchReportHtml(prompt, reportMarkdown, sources) {
 function prepareResearchReport(prompt, reportMarkdown) {
   const markdown = stripReportBoilerplate(String(reportMarkdown || "")).trim();
   const heading = markdown.match(/^#\s+(.+?)(?:\n+|$)/);
-  const title = heading ? cleanMarkdownInline(heading[1]) : makeReportTitle(prompt);
+  const candidateTitle = heading ? cleanMarkdownInline(heading[1]) : "";
+  const title = isBadReportTitle(candidateTitle) ? makeReportTitle(prompt) : candidateTitle || makeReportTitle(prompt);
   const bodyMarkdown = stripReportBoilerplate(heading ? markdown.slice(heading[0].length) : markdown).trim();
 
   return {
     title,
     bodyMarkdown: bodyMarkdown || "No report body was generated."
   };
+}
+
+function isBadReportTitle(title) {
+  return !title ||
+    /^role\s*:/i.test(title) ||
+    /\bsource required\b/i.test(title) ||
+    /\bplaceholder citations\b/i.test(title) ||
+    title.length > 140;
 }
 
 function stripReportBoilerplate(markdown) {
@@ -1090,6 +1217,17 @@ function cleanMarkdownInline(text) {
 function getResearchReportTheme(prompt, markdown) {
   const haystack = `${prompt} ${markdown}`.toLowerCase();
   const themes = {
+    environment: {
+      label: "Environmental research",
+      ink: "#17231f",
+      muted: "#5d6963",
+      line: "#d5ded8",
+      paper: "#f8faf8",
+      wash: "#e7f0eb",
+      panel: "#edf4f0",
+      accent: "#2e5f50",
+      accentSoft: "#dcebe4"
+    },
     technology: {
       label: "Technology diligence",
       ink: "#18212b",
@@ -1147,6 +1285,9 @@ function getResearchReportTheme(prompt, markdown) {
     }
   };
 
+  if (/(climate|ozone|atmospheric|environment|environmental|emissions|pollution|stratosphere|greenhouse|chemistry|ecology)/.test(haystack)) {
+    return themes.environment;
+  }
   if (/(ai|llm|software|platform|cloud|data|model|developer|api|cyber|security|chip|semiconductor|engineering|technical|ollama|local model)/.test(haystack)) {
     return themes.technology;
   }
@@ -1195,7 +1336,7 @@ function renderReportText(text) {
       continue;
     }
 
-    if (/^\*{3,}$|^-{3,}$/.test(trimmed)) {
+    if (/^#{1,6}$|^\*{3,}$|^-{3,}$/.test(trimmed)) {
       index += 1;
       continue;
     }
