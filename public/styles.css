@@ -962,16 +962,31 @@ h2 {
   gap: 18px;
 }
 
+.message.user {
+  grid-template-columns: minmax(0, 1fr) 58px;
+  margin-left: clamp(36px, 16%, 170px);
+}
+
+.message.assistant {
+  margin-right: clamp(24px, 8%, 96px);
+}
+
 .message-role {
   color: var(--muted);
   font-size: 0.84rem;
   font-weight: 750;
 }
 
+.message.user .message-role {
+  grid-column: 2;
+  text-align: right;
+}
+
 .message-content {
   min-width: 0;
   color: var(--ink);
   line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 
 .message.user .message-content,
@@ -981,6 +996,11 @@ h2 {
 }
 
 .message.user .message-content {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: end;
+  width: fit-content;
+  max-width: min(680px, 100%);
   background: var(--panel-strong);
   border: 1px solid rgba(124, 112, 96, 0.18);
   box-shadow: 0 12px 30px rgba(44, 41, 37, 0.05);
@@ -1460,6 +1480,13 @@ h2 {
   padding-left: 2px;
 }
 
+.message.user .message-actions {
+  grid-column: 1;
+  justify-self: end;
+  padding-right: 2px;
+  padding-left: 0;
+}
+
 .message-action-button {
   display: grid;
   place-items: center;
@@ -1852,7 +1879,37 @@ h2 {
     gap: 8px;
   }
 
+  .message.user,
+  .message.assistant {
+    margin-right: 0;
+    margin-left: 0;
+  }
+
   .message-role {
+    padding-left: 2px;
+  }
+
+  .message.user .message-role,
+  .message.user .message-content,
+  .message.user .message-actions {
+    grid-column: 1;
+  }
+
+  .message.user .message-role {
+    grid-row: auto;
+    text-align: left;
+  }
+
+  .message.user .message-content {
+    grid-row: auto;
+    justify-self: stretch;
+    width: auto;
+    max-width: none;
+  }
+
+  .message.user .message-actions {
+    justify-self: start;
+    padding-right: 0;
     padding-left: 2px;
   }
 
