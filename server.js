@@ -418,6 +418,12 @@ async function fetchResearchPage(url, res) {
   }
 
   try {
+    const githubPage = await fetchGitHubResearchPage(parsed);
+    if (githubPage) {
+      sendJson(res, 200, githubPage);
+      return;
+    }
+
     const upstream = await fetch(parsed.href, {
       headers: {
         "Accept": "text/html,application/xhtml+xml,text/plain",
@@ -448,6 +454,116 @@ async function fetchResearchPage(url, res) {
       error: "Unable to fetch page",
       detail: error instanceof Error ? error.message : String(error)
     });
+  }
+}
+
+async function fetchGitHubResearchPage(parsed) {
+  if (!/(^|\.)github\.com$/i.test(parsed.hostname)) return null;
+
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+
+  const [owner, repo] = parts;
+  if (!isSafeGitHubPathPart(owner) || !isSafeGitHubPathPart(repo)) return null;
+
+  if (parts[2] === "blob" && parts[3] && parts.length > 4) {
+    const branch = parts[3];
+    const filePath = parts.slice(4).join("/");
+    const rawUrl = `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(branch)}/${filePath.split("/").map(encodeURIComponent).join("/")}`;
+    const raw = await fetchTextWithTimeout(rawUrl, "text/plain, text/markdown, application/octet-stream");
+    if (!raw) return null;
+
+    return {
+      url: parsed.href,
+      finalUrl: rawUrl,
+      title: `${owner}/${repo}/${filePath}`,
+      contentType: raw.contentType,
+      text: `GitHub file: ${owner}/${repo}/${filePath}\nURL: ${parsed.href}\n\n${raw.text}`.slice(0, 18000)
+    };
+  }
+
+  if (parts.length > 2 && parts[2] !== "tree") return null;
+
+  const repoApi = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const repoInfo = await fetchJsonWithTimeout(repoApi);
+  if (!repoInfo?.full_name) return null;
+
+  const branch = typeof repoInfo.default_branch === "string" ? repoInfo.default_branch : "main";
+  const readmeApi = `${repoApi}/readme`;
+  const contentsApi = `${repoApi}/contents`;
+  const [readme, contents] = await Promise.all([
+    fetchTextWithTimeout(readmeApi, "application/vnd.github.raw,text/plain,text/markdown"),
+    fetchJsonWithTimeout(contentsApi)
+  ]);
+
+  const rootItems = Array.isArray(contents)
+    ? contents
+      .slice(0, 80)
+      .map((item) => `- ${item.type === "dir" ? "Directory" : "File"}: ${item.name}`)
+      .join("\n")
+    : "";
+
+  const text = [
+    `GitHub repository: ${repoInfo.full_name}`,
+    repoInfo.description ? `Description: ${repoInfo.description}` : "",
+    repoInfo.language ? `Primary language: ${repoInfo.language}` : "",
+    Number.isFinite(repoInfo.stargazers_count) ? `Stars: ${repoInfo.stargazers_count}` : "",
+    Number.isFinite(repoInfo.forks_count) ? `Forks: ${repoInfo.forks_count}` : "",
+    repoInfo.updated_at ? `Last updated: ${repoInfo.updated_at}` : "",
+    `Default branch: ${branch}`,
+    repoInfo.license?.name ? `License: ${repoInfo.license.name}` : "",
+    repoInfo.html_url ? `Repository URL: ${repoInfo.html_url}` : parsed.href,
+    rootItems ? `\nRoot contents:\n${rootItems}` : "",
+    readme?.text ? `\nREADME:\n${readme.text}` : ""
+  ].filter(Boolean).join("\n");
+
+  if (!text.trim()) return null;
+
+  return {
+    url: parsed.href,
+    finalUrl: repoInfo.html_url || parsed.href,
+    title: repoInfo.full_name,
+    contentType: "text/plain; charset=utf-8",
+    text: text.slice(0, 18000)
+  };
+}
+
+function isSafeGitHubPathPart(value) {
+  return /^[A-Za-z0-9_.-]+$/.test(value || "");
+}
+
+async function fetchJsonWithTimeout(url) {
+  try {
+    const upstream = await fetch(url, {
+      headers: {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Mozilla/5.0 OakerDeepResearch/0.1"
+      },
+      signal: AbortSignal.timeout(12000)
+    });
+    if (!upstream.ok) return null;
+    return await upstream.json();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchTextWithTimeout(url, accept) {
+  try {
+    const upstream = await fetch(url, {
+      headers: {
+        Accept: accept,
+        "User-Agent": "Mozilla/5.0 OakerDeepResearch/0.1"
+      },
+      signal: AbortSignal.timeout(12000)
+    });
+    if (!upstream.ok) return null;
+    return {
+      contentType: upstream.headers.get("content-type") || "text/plain; charset=utf-8",
+      text: await upstream.text()
+    };
+  } catch {
+    return null;
   }
 }
 

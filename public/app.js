@@ -501,6 +501,7 @@ function createResearchState(prompt) {
     plan: "",
     evolvingReport: "",
     findings: [],
+    seedUrls: [],
     category: "",
     status: "running",
     startedAt: Date.now(),
@@ -516,6 +517,8 @@ async function runDeepResearch(prompt, model, assistantMessage, conversation, si
   const research = assistantMessage.research;
   const researchQuestion = research.question || extractResearchQuestion(prompt);
   research.question = researchQuestion;
+  const seedUrls = extractResearchSeedUrls(prompt || researchQuestion);
+  research.seedUrls = seedUrls;
   const findings = [];
   const sourceByUrl = new Map();
   const queriesUsed = new Set();
@@ -562,8 +565,12 @@ async function runDeepResearch(prompt, model, assistantMessage, conversation, si
     updateResearchProgress(assistantMessage, conversation);
     setConnection("checking", `Research turn ${turnNumber}`, `Searching ${queries.length || 1} quer${queries.length === 1 ? "y" : "ies"}`);
 
+    const seedPlan = turnNumber === 1
+      ? buildSeedResearchSites(seedUrls, sourceByUrl, nextCitationId)
+      : { sites: [], nextCitationId };
+    nextCitationId = seedPlan.nextCitationId;
     const searchPlan = await searchResearchQueries(queries, sourceByUrl, nextCitationId, signal);
-    turn.sites = searchPlan.sites;
+    turn.sites = [...seedPlan.sites, ...searchPlan.sites].slice(0, DEEP_RESEARCH_SITES_PER_TURN);
     nextCitationId = searchPlan.nextCitationId;
 
     updateResearchProgress(assistantMessage, conversation);
@@ -624,7 +631,23 @@ async function runDeepResearch(prompt, model, assistantMessage, conversation, si
   updateResearchProgress(assistantMessage, conversation);
   setConnection("checking", "Writing report", "Generating local website");
 
-  const sources = collectResearchSources(research);
+  let sources = collectResearchSources(research);
+  if (findings.length === 0) {
+    const fallbackFindings = createFindingsFromReadableSources(research);
+    findings.push(...fallbackFindings);
+    research.findings = findings;
+    if (fallbackFindings.length > 0 && !research.evolvingReport) {
+      research.evolvingReport = buildFindingsFallbackReport(researchQuestion, fallbackFindings);
+    }
+    sources = collectResearchSources(research);
+  }
+  if (findings.length === 0) {
+    const detail = sources.length > 0
+      ? `Deep research read ${sources.length} source${sources.length === 1 ? "" : "s"}, but none yielded usable evidence.`
+      : "Deep research could not find or read any sources.";
+    throw new Error(`${detail} Try a more specific query, include direct source links, or retry after DuckDuckGo/GitHub rate limits clear.`);
+  }
+
   let reportMarkdown = "";
   try {
     reportMarkdown = await writeResearchReport(researchQuestion, research, sources, model, signal);
@@ -808,6 +831,71 @@ function normalizeResearchUrl(url) {
   }
 }
 
+function extractResearchSeedUrls(text) {
+  const matches = String(text || "").match(/https?:\/\/[^\s<>"'`)\]]+/gi) || [];
+  const urls = [];
+  for (const rawUrl of matches) {
+    const cleaned = rawUrl.replace(/[.,;:!?]+$/g, "");
+    if (!normalizeResearchUrl(cleaned)) continue;
+    urls.push(cleaned);
+    urls.push(...expandGitHubResearchUrls(cleaned));
+  }
+
+  const seen = new Set();
+  return urls.filter((url) => {
+    const key = normalizeResearchUrl(url);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 8);
+}
+
+function expandGitHubResearchUrls(url) {
+  try {
+    const parsed = new URL(url);
+    if (!/(^|\.)github\.com$/i.test(parsed.hostname)) return [];
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (parts.length < 2) return [];
+    const [owner, repo, marker, branch, ...rest] = parts;
+
+    if (marker === "blob" && branch && rest.length > 0) {
+      return [`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${rest.join("/")}`];
+    }
+
+    if (marker && marker !== "tree") return [];
+    return [
+      `https://raw.githubusercontent.com/${owner}/${repo}/dev/README.md`,
+      `https://raw.githubusercontent.com/${owner}/${repo}/main/README.md`,
+      `https://raw.githubusercontent.com/${owner}/${repo}/master/README.md`
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function buildSeedResearchSites(seedUrls, sourceByUrl, nextCitationId) {
+  const sites = [];
+  for (const seedUrl of seedUrls || []) {
+    const normalizedUrl = normalizeResearchUrl(seedUrl);
+    if (!normalizedUrl || sourceByUrl.has(normalizedUrl)) continue;
+    const site = {
+      citationId: nextCitationId,
+      title: getSourceHost(seedUrl) || seedUrl,
+      url: seedUrl,
+      snippet: "Direct source supplied in the prompt",
+      status: "queued",
+      text: "",
+      finding: null,
+      error: "",
+      query: "direct source"
+    };
+    nextCitationId += 1;
+    sourceByUrl.set(normalizedUrl, site);
+    sites.push(site);
+  }
+  return { sites, nextCitationId };
+}
+
 function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -855,6 +943,41 @@ function buildFindingsFallbackReport(question, findings) {
   }).join("\n\n");
 
   return `## Current Findings\n\n${grouped}`;
+}
+
+function createFindingsFromReadableSources(research) {
+  const findings = [];
+  for (const turn of research.turns || []) {
+    for (const site of turn.sites || []) {
+      if (!site?.citationId || site.finding) continue;
+      const excerpt = makeSourceExcerpt(site.text || site.snippet || "");
+      if (!excerpt) continue;
+      findings.push({
+        citationId: site.citationId,
+        title: site.title || site.url || `Source ${site.citationId}`,
+        url: site.url || "",
+        query: site.query || "source fallback",
+        summary: excerpt,
+        evidence: [excerpt],
+        limitations: site.status === "error" ? (site.error || "The page could not be fully analyzed.") : "Built from readable source text because model extraction produced no structured finding.",
+        followUp: ""
+      });
+      site.status = site.status === "error" ? "error" : "skimmed";
+      site.finding = findings.at(-1);
+      site.snippet = excerpt;
+      if (findings.length >= 12) return findings;
+    }
+  }
+  return findings;
+}
+
+function makeSourceExcerpt(value) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length < 120) return "";
+  const excerpt = text.slice(0, 700).replace(/\s+\S*$/, "").trim();
+  return excerpt || "";
 }
 
 async function createResearchPlan(question, model, signal) {
@@ -1102,7 +1225,7 @@ async function writeResearchReport(prompt, research, sources, model, signal) {
       ...getResearchBaseMessages(),
       {
         role: "user",
-        content: `${currentDateContext()}Write a long, detailed, comprehensive research report answering this question:\n\n${prompt}\n\nResearch plan:\n${research.plan || "(No plan.)"}\n\nEvolving report from research rounds:\n${research.evolvingReport || buildFindingsFallbackReport(prompt, findings)}\n\nSelected extracted evidence:\n${formatResearchFindings(findings.slice(-36))}\n\nSource inventory:\n${sources.map((source) => `[[${source.citationId}]] ${source.title}\n${source.url}\n${source.snippet || ""}`).join("\n\n")}\n\nRequirements:\n- Write at minimum ${DEEP_RESEARCH_FINAL_MIN_WORDS} words unless the evidence base is genuinely tiny.\n- Start with one Markdown H1 title only. Do not include Prepared For, Prepared By, Date, Subject, Style Guide, client names, or memo boilerplate.\n- Add an executive summary at the top.\n- Use clear ## headings and ### subheadings.\n- Each major section should have developed paragraphs, not just bullets.\n- Synthesize and analyze: explain why findings matter, compare sources, note uncertainty, and identify where sources agree or diverge.\n- Include specific dates, numbers, actors, mechanisms, and examples from evidence when available.\n- Use clean citation markers like [[3]] for source-backed claims. Do not invent citation numbers.\n- End with a conclusion that directly answers the question.\n${categoryInstructions}`
+        content: `${currentDateContext()}Write a long, detailed, comprehensive research report answering this question:\n\n${prompt}\n\nCoverage checklist from the plan. This is NOT evidence and must not appear as report content:\n${research.plan || "(No plan.)"}\n\nEvidence-backed evolving synthesis:\n${research.evolvingReport || buildFindingsFallbackReport(prompt, findings)}\n\nExtracted evidence. Treat this as the source of truth:\n${formatResearchFindings(findings.slice(-44))}\n\nSource inventory. You may cite only these citation IDs:\n${sources.map((source) => `[[${source.citationId}]] ${source.title}\n${source.url}\n${source.snippet || ""}`).join("\n\n")}\n\nRequirements:\n- Write the actual report, not a research plan, outline, instruction sheet, or discussion of what the report should contain.\n- Every factual paragraph must be grounded in the extracted evidence or source inventory. If evidence is thin, say so and write an evidence-limited report rather than inventing facts.\n- Write at minimum ${DEEP_RESEARCH_FINAL_MIN_WORDS} words when the evidence supports it; otherwise prioritize honesty over length.\n- Start with one Markdown H1 title only. Do not include Prepared For, Prepared By, Date, Subject, Style Guide, client names, or memo boilerplate.\n- Add an executive summary at the top that states actual findings.\n- Use clear ## headings and ### subheadings.\n- Each major section should have developed paragraphs, not just bullets.\n- Synthesize and analyze: explain why findings matter, compare sources, note uncertainty, and identify where sources agree or diverge.\n- Include specific dates, numbers, actors, mechanisms, file names, features, and examples from evidence when available.\n- Use clean citation markers like [[3]] for source-backed claims. Do not invent citation numbers, and never write [[N/A]].\n- End with a conclusion that directly answers the question.\n${categoryInstructions}`
       }
     ],
     signal,
@@ -1118,7 +1241,7 @@ async function repairResearchReport(prompt, research, sources, failedDraft, mode
       ...getResearchBaseMessages(),
       {
         role: "user",
-        content: `The previous final report draft was unusable or too short:\n\n${String(failedDraft || "").slice(0, 1600)}\n\nWrite the full report again from the material below. Do not echo role instructions. Do not output only a title or a single # marker.\n\nQuestion: ${prompt}\n\nEvolving report:\n${research.evolvingReport || "(No evolving report.)"}\n\nExtracted evidence:\n${formatResearchFindings(findings.slice(-44))}\n\nSources:\n${sources.map((source) => `[[${source.citationId}]] ${source.title}\n${source.url}\n${source.snippet || ""}`).join("\n\n")}\n\nReturn a substantial Markdown report with one H1 title, executive summary, detailed sections, evidence caveats, and conclusion. Use citation markers like [[number]] where supported by the listed sources.`
+        content: `The previous final report draft was unusable, too short, or plan-like:\n\n${String(failedDraft || "").slice(0, 1600)}\n\nWrite the actual report again from the evidence below. Do not echo role instructions, planning language, section requirements, or "the report must..." statements. Do not output only a title or a single # marker.\n\nQuestion: ${prompt}\n\nEvidence-backed evolving synthesis:\n${research.evolvingReport || "(No evolving report.)"}\n\nExtracted evidence:\n${formatResearchFindings(findings.slice(-44))}\n\nSources you may cite:\n${sources.map((source) => `[[${source.citationId}]] ${source.title}\n${source.url}\n${source.snippet || ""}`).join("\n\n")}\n\nReturn a substantial Markdown report with one H1 title, executive summary, detailed sections, evidence caveats, and conclusion. Use citation markers like [[number]] where supported by the listed sources. Never write [[N/A]]. If evidence is insufficient, say exactly what was available and what could not be verified.`
       }
     ],
     signal,
@@ -1139,8 +1262,11 @@ function isWeakResearchReport(markdown) {
     wordCount < 650 ||
     /^#{1,3}\s*$/.test(raw) ||
     /^#\s*role\s*:/i.test(raw) ||
+    /\[\[N\/A\]\]/i.test(raw) ||
     /\bsource required\b/i.test(raw) ||
-    /\bplaceholder citations\b/i.test(raw)
+    /\bplaceholder citations\b/i.test(raw) ||
+    /\b(contingent upon|successful extraction|initial review parameters|necessary analytical framework)\b/i.test(raw) ||
+    /\b(the analysis|this section|the report)\s+must\b/i.test(raw)
   );
 }
 
