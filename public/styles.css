@@ -557,7 +557,8 @@ output {
 }
 
 .settings-dialog,
-.graph-dialog {
+.graph-dialog,
+.diagnostics-dialog {
   width: min(680px, calc(100vw - 32px));
   max-height: min(720px, calc(100vh - 32px));
   padding: 0;
@@ -567,13 +568,15 @@ output {
 }
 
 .settings-dialog::backdrop,
-.graph-dialog::backdrop {
+.graph-dialog::backdrop,
+.diagnostics-dialog::backdrop {
   background: rgba(44, 41, 37, 0.34);
   backdrop-filter: blur(6px);
 }
 
 .settings-panel,
-.graph-panel {
+.graph-panel,
+.diagnostics-panel {
   display: grid;
   gap: 22px;
   max-height: min(720px, calc(100vh - 32px));
@@ -897,6 +900,118 @@ h2 {
 
 .clear-memories {
   justify-self: start;
+}
+
+.memory-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 8px;
+  align-items: start;
+}
+
+.memory-delete {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+  background: transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 1.05rem;
+}
+
+.memory-delete:hover {
+  color: var(--error);
+  background: rgba(159, 53, 44, 0.08);
+}
+
+.compare-model-list {
+  display: grid;
+  gap: 8px;
+}
+
+.compare-model-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  padding: 9px 11px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(52, 79, 67, 0.12);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.compare-model-item span {
+  overflow: hidden;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-model-item small {
+  color: var(--subtle);
+}
+
+.diagnostics-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.diagnostics-content {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.diagnostics-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(52, 79, 67, 0.12);
+  border-radius: var(--radius);
+}
+
+.diagnostics-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.diagnostics-section dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.diagnostics-section dl > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.diagnostics-section dt {
+  color: var(--subtle);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.diagnostics-section dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 0.86rem;
+}
+
+.diagnostics-empty {
+  grid-column: 1 / -1;
+  padding: 14px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(52, 79, 67, 0.12);
+  border-radius: var(--radius);
 }
 
 .messages {
@@ -1416,6 +1531,134 @@ h2 {
   border-radius: var(--radius);
 }
 
+.compare-run {
+  display: grid;
+  gap: 14px;
+}
+
+.compare-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: start;
+}
+
+.compare-prompt {
+  margin-top: 4px;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.compare-header .research-kicker {
+  color: var(--muted);
+}
+
+.compare-status-pill,
+.compare-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 9px;
+  color: var(--sage-dark);
+  background: rgba(52, 79, 67, 0.08);
+  border: 1px solid rgba(52, 79, 67, 0.12);
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 780;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.compare-run.running .compare-status-pill,
+.compare-card.running .compare-status {
+  color: var(--accent-strong);
+  background: rgba(184, 95, 62, 0.1);
+  border-color: rgba(184, 95, 62, 0.18);
+}
+
+.compare-run.error .compare-status-pill,
+.compare-card.error .compare-status {
+  color: var(--error);
+  background: rgba(159, 53, 44, 0.08);
+  border-color: rgba(159, 53, 44, 0.15);
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 10px;
+}
+
+.compare-card {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.54);
+  border: 1px solid rgba(124, 112, 96, 0.14);
+  border-radius: var(--radius);
+}
+
+.compare-card.fastest {
+  border-color: rgba(52, 79, 67, 0.28);
+  box-shadow: inset 3px 0 0 var(--sage-dark);
+}
+
+.compare-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.compare-model,
+.compare-meta,
+.compare-context {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-model {
+  font-weight: 800;
+}
+
+.compare-meta,
+.compare-context,
+.compare-waiting {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.compare-context {
+  min-height: 28px;
+  padding: 6px 8px;
+  background: rgba(52, 79, 67, 0.07);
+  border-radius: 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+.compare-answer {
+  min-width: 0;
+}
+
+.compare-answer > :first-child {
+  margin-top: 0;
+}
+
+.compare-answer > :last-child {
+  margin-bottom: 0;
+}
+
+.compare-error {
+  padding: 10px 12px;
+  color: var(--error);
+  background: rgba(159, 53, 44, 0.06);
+  border: 1px solid rgba(159, 53, 44, 0.14);
+  border-radius: var(--radius);
+}
+
 @keyframes researchPulse {
   50% {
     transform: translate(-50%, -50%) scale(1.14);
@@ -1649,6 +1892,7 @@ h2 {
 
 .chevron-icon,
 .model-refresh-button svg,
+.compare-toggle svg,
 .web-toggle svg,
 .deep-research-toggle svg,
 .send-button svg {
@@ -1765,6 +2009,7 @@ h2 {
   color: var(--muted);
 }
 
+.compare-toggle,
 .web-toggle,
 .deep-research-toggle {
   display: grid;
@@ -1778,6 +2023,8 @@ h2 {
   cursor: pointer;
 }
 
+.compare-toggle:hover,
+.compare-toggle.active,
 .web-toggle:hover,
 .web-toggle.active,
 .deep-research-toggle:hover,
@@ -1787,6 +2034,7 @@ h2 {
   border-color: rgba(52, 79, 67, 0.12);
 }
 
+.compare-toggle.active,
 .web-toggle.active,
 .deep-research-toggle.active {
   color: #fffaf3;
@@ -1834,6 +2082,7 @@ h2 {
 .quiet-button:disabled,
 .model-trigger:disabled,
 .model-refresh-button:disabled,
+.compare-toggle:disabled,
 .web-toggle:disabled,
 .deep-research-toggle:disabled,
 .message-action-button:disabled {
@@ -1941,6 +2190,17 @@ h2 {
 
   .research-source-host {
     display: none;
+  }
+
+  .compare-header,
+  .compare-card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .compare-grid,
+  .diagnostics-content {
+    grid-template-columns: 1fr;
   }
 }
 

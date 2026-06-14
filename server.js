@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -43,6 +43,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/tags" && req.method === "GET") {
       await proxyJson(res, "/api/tags");
+      return;
+    }
+
+    if (url.pathname === "/api/diagnostics" && req.method === "GET") {
+      await sendDiagnostics(res);
       return;
     }
 
@@ -243,6 +248,81 @@ async function proxyJson(res, endpoint) {
       ollamaHost
     });
   }
+}
+
+async function sendDiagnostics(res) {
+  const startedAt = Date.now() - Math.floor(process.uptime() * 1000);
+  let ollama = {
+    ok: false,
+    version: "",
+    modelCount: 0,
+    error: ""
+  };
+  let reportCount = 0;
+
+  try {
+    const [versionResponse, tagsResponse] = await Promise.all([
+      fetch(`${ollamaHost}/api/version`, { signal: AbortSignal.timeout(5000) }),
+      fetch(`${ollamaHost}/api/tags`, { signal: AbortSignal.timeout(5000) })
+    ]);
+    const versionPayload = versionResponse.ok ? await versionResponse.json() : {};
+    const tagsPayload = tagsResponse.ok ? await tagsResponse.json() : {};
+    ollama = {
+      ok: versionResponse.ok,
+      version: versionPayload.version || "",
+      modelCount: Array.isArray(tagsPayload.models) ? tagsPayload.models.length : 0,
+      error: versionResponse.ok ? "" : `Ollama returned ${versionResponse.status}`
+    };
+  } catch (error) {
+    ollama.error = error instanceof Error ? error.message : String(error);
+  }
+
+  try {
+    const files = await readdir(reportsDir);
+    reportCount = files.filter((file) => file.endsWith(".html")).length;
+  } catch {
+    reportCount = 0;
+  }
+
+  const conversationRows = db
+    .prepare("SELECT messages_json FROM conversations")
+    .all();
+  const messageCount = conversationRows.reduce((total, row) => {
+    const messages = safeParseJson(row.messages_json);
+    return total + (Array.isArray(messages) ? messages.length : 0);
+  }, 0);
+
+  sendJson(res, 200, {
+    app: {
+      name: "Oaker",
+      serverTime: new Date().toISOString(),
+      startedAt: new Date(startedAt).toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      node: process.version,
+      platform: `${process.platform} ${process.arch}`
+    },
+    ollama: {
+      host: ollamaHost,
+      ...ollama
+    },
+    storage: {
+      database: path.join(__dirname, "oaker.sqlite"),
+      conversations: conversationRows.length,
+      messages: messageCount,
+      reports: reportCount
+    },
+    search: {
+      provider: "DuckDuckGo HTML",
+      githubDirectReader: true
+    },
+    security: {
+      bind: "127.0.0.1",
+      notes: [
+        "Keep Ollama and Oaker bound to localhost unless you add authentication.",
+        "Web pages and search results are treated as untrusted model context."
+      ]
+    }
+  });
 }
 
 async function proxyChat(req, res) {
