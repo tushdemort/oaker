@@ -2348,6 +2348,63 @@ function branchConversationFromMessage(messageId) {
   setConnection("online", "Branch created", sourceConversation.title || "New chat");
 }
 
+async function copyMessageToClipboard(messageId, button) {
+  const conversation = getCurrentConversation();
+  const message = conversation?.messages.find((item) => item.id === messageId);
+  const text = getCopyableMessageText(message);
+  if (!text) return;
+
+  try {
+    await writeClipboardText(text);
+    showCopiedState(button);
+  } catch {
+    setConnection("offline", "Copy failed", "Clipboard access was blocked");
+  }
+}
+
+async function writeClipboardText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error("Clipboard unavailable");
+  }
+}
+
+function getCopyableMessageText(message) {
+  if (!message) return "";
+  if (message.content?.trim()) return message.content.trim();
+  if (message.research?.reportUrl) {
+    return `Deep research complete.\n${window.location.origin}${message.research.reportUrl}`;
+  }
+  if (message.research?.prompt) return message.research.prompt.trim();
+  return "";
+}
+
+function showCopiedState(button) {
+  if (!button) return;
+
+  button.classList.add("copied");
+  button.setAttribute("aria-label", "Copied message");
+  button.title = "Copied";
+  window.setTimeout(() => {
+    button.classList.remove("copied");
+    button.setAttribute("aria-label", "Copy message");
+    button.title = "Copy message";
+  }, 1200);
+}
+
 function cloneMessageForBranch(message) {
   const clone = JSON.parse(JSON.stringify(message));
   clone.id = crypto.randomUUID();
@@ -2572,27 +2629,45 @@ function renderMessages() {
       article.append(metrics);
     }
 
-    if (message.role === "assistant" && !message.error) {
+    if (!message.error) {
       const actions = document.createElement("div");
       actions.className = "message-actions";
 
-      const branchButton = document.createElement("button");
-      branchButton.className = "message-action-button";
-      branchButton.type = "button";
-      branchButton.disabled = state.isStreaming;
-      branchButton.setAttribute("aria-label", "Branch from this response");
-      branchButton.title = "Branch from this response";
-      branchButton.innerHTML = `
+      if (message.role === "assistant") {
+        const branchButton = document.createElement("button");
+        branchButton.className = "message-action-button";
+        branchButton.type = "button";
+        branchButton.disabled = state.isStreaming;
+        branchButton.setAttribute("aria-label", "Branch from this response");
+        branchButton.title = "Branch from this response";
+        branchButton.innerHTML = `
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <circle cx="6" cy="6" r="2.5" />
+            <circle cx="18" cy="12" r="2.5" />
+            <circle cx="6" cy="18" r="2.5" />
+            <path d="M8.4 6.8 15.6 11.2" />
+            <path d="M8.4 17.2 15.6 12.8" />
+          </svg>
+        `;
+        branchButton.addEventListener("click", () => branchConversationFromMessage(message.id));
+        actions.append(branchButton);
+      }
+
+      const copyButton = document.createElement("button");
+      copyButton.className = "message-action-button";
+      copyButton.type = "button";
+      copyButton.setAttribute("aria-label", "Copy message");
+      copyButton.title = "Copy message";
+      copyButton.innerHTML = `
         <svg aria-hidden="true" viewBox="0 0 24 24">
-          <circle cx="6" cy="6" r="2.5" />
-          <circle cx="18" cy="12" r="2.5" />
-          <circle cx="6" cy="18" r="2.5" />
-          <path d="M8.4 6.8 15.6 11.2" />
-          <path d="M8.4 17.2 15.6 12.8" />
+          <rect x="8" y="8" width="11" height="11" rx="2" />
+          <path d="M5 15V7a2 2 0 0 1 2-2h8" />
         </svg>
       `;
-      branchButton.addEventListener("click", () => branchConversationFromMessage(message.id));
-      actions.append(branchButton);
+      copyButton.addEventListener("click", () => {
+        void copyMessageToClipboard(message.id, copyButton);
+      });
+      actions.append(copyButton);
       article.append(actions);
     }
 
