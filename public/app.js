@@ -1,12 +1,19 @@
 const STORAGE_KEY = "oaker.local-chat.conversations.v1";
 const SETTINGS_KEY = "oaker.local-chat.settings.v1";
 
-const DEFAULT_SYSTEM_PROMPT = "You are a thoughtful local assistant. Be concise, practical, and clear.";
+const DEFAULT_SYSTEM_PROMPT = [
+  "You are Oaker, a thoughtful local AI assistant running on the user's machine.",
+  "Answer with care, precision, and useful structure. Be direct without being terse.",
+  "When the task is ambiguous, state the assumption you are making and proceed.",
+  "Preserve uncertainty, do not invent facts, and separate evidence from inference.",
+  "Prefer practical next steps, concrete examples, and concise explanations over generic advice.",
+  "Do not use emojis unless the user explicitly asks for them."
+].join(" ");
 const BEHAVIOR_PRESETS = [
   {
     id: "balanced",
     name: "Balanced",
-    description: "Clear, helpful, and steady.",
+    description: "Careful, warm, and practical.",
     temperature: 0.7,
     systemPrompt: DEFAULT_SYSTEM_PROMPT
   },
@@ -15,21 +22,60 @@ const BEHAVIOR_PRESETS = [
     name: "Precise",
     description: "Short answers with fewer guesses.",
     temperature: 0.2,
-    systemPrompt: "You are a precise local assistant. Answer directly, state uncertainty, and avoid speculation."
+    systemPrompt: [
+      "You are Oaker in precise mode.",
+      "Answer the exact question first, then include only the context needed to make the answer reliable.",
+      "State uncertainty plainly. If information is missing, say what would change the answer.",
+      "Avoid speculation, filler, and decorative language. Do not use emojis unless explicitly requested."
+    ].join(" ")
   },
   {
     id: "creative",
     name: "Creative",
     description: "More exploratory and idea-rich.",
     temperature: 1.1,
-    systemPrompt: "You are a creative local assistant. Explore useful possibilities, offer vivid options, and stay practical."
+    systemPrompt: [
+      "You are Oaker in creative mode.",
+      "Generate varied, high-quality options while staying grounded in the user's goal.",
+      "Make ideas concrete enough to act on. When useful, give contrasting directions with tradeoffs.",
+      "Avoid empty hype. Do not use emojis unless explicitly requested."
+    ].join(" ")
   },
   {
     id: "code",
     name: "Code",
     description: "Engineering-focused responses.",
     temperature: 0.4,
-    systemPrompt: "You are a senior engineering assistant. Prefer concrete fixes, concise explanations, and careful tradeoffs."
+    systemPrompt: [
+      "You are Oaker in senior engineer mode.",
+      "Read the problem carefully, reason from the existing system, and prefer small, robust fixes.",
+      "Explain tradeoffs, edge cases, and verification steps. If code is requested, produce maintainable code that fits the local style.",
+      "Avoid over-engineering. Do not use emojis unless explicitly requested."
+    ].join(" ")
+  },
+  {
+    id: "analyst",
+    name: "Analyst",
+    description: "Structured, evidence-led reports.",
+    temperature: 0.35,
+    systemPrompt: [
+      "You are Oaker in analyst mode.",
+      "Think like a rigorous strategy researcher: define the question, separate facts from interpretation, evaluate source quality, and make implications explicit.",
+      "Use crisp headings, comparison tables when helpful, and decision-ready conclusions.",
+      "Do not invent citations, numbers, or dates. Do not use emojis unless explicitly requested."
+    ].join(" ")
+  },
+  {
+    id: "coach",
+    name: "Coach",
+    description: "Explains and teaches clearly.",
+    temperature: 0.55,
+    systemPrompt: [
+      "You are Oaker in coaching mode.",
+      "Help the user understand the idea, not just the answer. Start from their current level and build up with examples.",
+      "Use analogies only when they clarify. Check assumptions and highlight common mistakes.",
+      "Do not use emojis unless explicitly requested."
+    ].join(" ")
   },
   {
     id: "custom",
@@ -47,6 +93,10 @@ const DEEP_RESEARCH_MAX_TURNS = 10;
 const DEEP_RESEARCH_MIN_TURNS = 3;
 const DEEP_RESEARCH_SITES_PER_TURN = 20;
 const DEEP_RESEARCH_EXTRACT_CHARS = 4200;
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 8192;
+const CONTEXT_RESPONSE_RESERVE_TOKENS = 1536;
+const CONTEXT_TARGET_RATIO = 0.82;
+const CONTEXT_RECENT_TURNS = 8;
 
 const elements = {
   composer: document.querySelector("#composer"),
@@ -54,6 +104,9 @@ const elements = {
   connectionDetail: document.querySelector("#connectionDetail"),
   connectionTitle: document.querySelector("#connectionTitle"),
   conversationList: document.querySelector("#conversationList"),
+  contextLabel: document.querySelector("#contextLabel"),
+  contextMeter: document.querySelector("#contextMeter"),
+  contextRing: document.querySelector("#contextRing"),
   deepResearchButton: document.querySelector("#deepResearchButton"),
   graphCloseButton: document.querySelector("#graphCloseButton"),
   graphDialog: document.querySelector("#graphDialog"),
@@ -131,7 +184,10 @@ function bindEvents() {
     await sendMessage();
   });
 
-  elements.promptInput.addEventListener("input", () => autoGrow(elements.promptInput));
+  elements.promptInput.addEventListener("input", () => {
+    autoGrow(elements.promptInput);
+    renderContextMeter();
+  });
   elements.promptInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -343,7 +399,9 @@ async function sendMessage() {
       }
     }
 
-    const requestMessages = buildRequestMessages(previousMessages, prompt, webContext);
+    const contextPlan = buildRequestMessages(previousMessages, prompt, webContext, conversation);
+    const requestMessages = contextPlan.messages;
+    conversation.contextStats = contextPlan.stats;
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -352,7 +410,8 @@ async function sendMessage() {
         messages: requestMessages,
         stream: true,
         options: {
-          temperature: Number(state.settings.temperature)
+          temperature: Number(state.settings.temperature),
+          num_ctx: contextPlan.stats.windowTokens
         }
       }),
       signal: state.abortController.signal
@@ -811,7 +870,8 @@ async function askModelOnce(model, messages, signal) {
       messages,
       stream: false,
       options: {
-        temperature: Math.min(Number(state.settings.temperature) || 0.2, 0.4)
+        temperature: Math.min(Number(state.settings.temperature) || 0.2, 0.4),
+        num_ctx: getContextWindowTokens(model)
       }
     }),
     signal
@@ -1578,37 +1638,162 @@ async function fetchWebContext(query) {
   };
 }
 
-function buildRequestMessages(previousMessages, prompt, webContext = null) {
+function buildRequestMessages(previousMessages, prompt, webContext = null, conversation = null) {
   const systemPrompt = state.settings.systemPrompt.trim();
-  const messages = [];
+  const baseMessages = [];
 
   if (systemPrompt) {
-    messages.push({ role: "system", content: systemPrompt });
+    baseMessages.push({ role: "system", content: systemPrompt });
   }
 
   const memories = state.settings.memoryEnabled ? state.settings.memories : [];
   if (memories.length > 0) {
-    messages.push({
+    baseMessages.push({
       role: "system",
       content: `User memories and preferences saved locally. Treat these as standing user instructions and follow them unless the current message explicitly overrides them. Do not mention the memories unless helpful.\n\n${memories.map((memory) => `- ${memory.text}`).join("\n")}`
     });
   }
 
   if (webContext?.results?.length) {
-    messages.push({
+    baseMessages.push({
       role: "system",
       content: `Web search results from DuckDuckGo HTML for "${webContext.query}". Each result has a citation ID. When using web information, place citations immediately after the exact sentence or bullet they support using [[1]], [[2]], etc. Cite throughout the answer. Do not invent citation IDs and do not add a separate sources section.\n\n${webContext.results.map((result, index) => `[[${index + 1}]] ${result.title}\nURL: ${result.url}\nSnippet: ${result.snippet || "No snippet"}`).join("\n\n")}`
     });
   }
 
-  for (const message of previousMessages) {
-    if (message.role === "user" || message.role === "assistant") {
-      messages.push({ role: message.role, content: message.content });
+  const history = previousMessages
+    .filter((message) => (message.role === "user" || message.role === "assistant") && message.content)
+    .map((message) => ({ role: message.role, content: message.content }));
+  const plan = packContextMessages(baseMessages, history, { role: "user", content: prompt }, conversation);
+
+  return plan;
+}
+
+function packContextMessages(baseMessages, history, userMessage, conversation = null) {
+  const windowTokens = getContextWindowTokens(state.settings.model);
+  const reserveTokens = Math.min(CONTEXT_RESPONSE_RESERVE_TOKENS, Math.floor(windowTokens * 0.22));
+  const hardBudget = Math.max(1024, windowTokens - reserveTokens);
+  const targetBudget = Math.max(1024, Math.floor(hardBudget * CONTEXT_TARGET_RATIO));
+  const recent = [];
+  const older = [];
+  let usedTokens = estimateMessagesTokens(baseMessages) + estimateMessageTokens(userMessage);
+
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    const messageTokens = estimateMessageTokens(message);
+    const turnCount = Math.ceil(recent.length / 2);
+    if (usedTokens + messageTokens <= targetBudget && turnCount < CONTEXT_RECENT_TURNS) {
+      recent.unshift(message);
+      usedTokens += messageTokens;
+    } else {
+      older.unshift(message);
     }
   }
 
-  messages.push({ role: "user", content: prompt });
-  return messages;
+  const messages = [...baseMessages];
+  let compacted = older.length > 0;
+  let summaryTokens = 0;
+  let droppedMessages = 0;
+
+  if (older.length > 0) {
+    const summaryBudget = Math.max(500, Math.min(1600, targetBudget - usedTokens));
+    const summary = buildContextSummary(older, summaryBudget);
+    if (conversation) {
+      conversation.contextSummary = summary;
+    }
+    const summaryMessage = {
+      role: "system",
+      content: `Auto-compacted earlier conversation context. Use this as background, but prioritize the recent verbatim messages and the user's latest request.\n\n${summary}`
+    };
+    summaryTokens = estimateMessageTokens(summaryMessage);
+    if (usedTokens + summaryTokens <= hardBudget) {
+      messages.push(summaryMessage);
+      usedTokens += summaryTokens;
+    }
+  }
+
+  for (const message of recent) {
+    messages.push(message);
+  }
+  messages.push(userMessage);
+
+  while (estimateMessagesTokens(messages) > hardBudget && messages.length > baseMessages.length + 2) {
+    const removableIndex = messages.findIndex((message, index) => index >= baseMessages.length && message.role !== "system");
+    if (removableIndex < 0) break;
+    messages.splice(removableIndex, 1);
+    compacted = true;
+    droppedMessages += 1;
+  }
+
+  const finalTokens = estimateMessagesTokens(messages);
+  const stats = {
+    usedTokens: finalTokens,
+    rawTokens: estimateMessagesTokens([...baseMessages, ...history, userMessage]),
+    windowTokens,
+    budgetTokens: hardBudget,
+    percent: Math.min(100, Math.round((finalTokens / windowTokens) * 100)),
+    compacted,
+    summaryTokens,
+    droppedMessages
+  };
+
+  if (conversation) {
+    conversation.contextStats = stats;
+  }
+
+  return { messages, stats };
+}
+
+function buildContextSummary(messages, tokenBudget) {
+  const lines = [
+    "This is a compact synopsis of older conversation turns. Preserve user constraints, project decisions, names, preferences, unresolved questions, and any facts the user supplied."
+  ];
+  for (const message of messages) {
+    const label = message.role === "assistant" ? "Assistant" : "User";
+    const summary = summarizeTextForContext(message.content, message.role === "assistant" ? 300 : 240);
+    if (summary) {
+      lines.push(`- ${label}: ${summary}`);
+    }
+  }
+
+  return trimToTokenBudget(lines.join("\n"), tokenBudget);
+}
+
+function summarizeTextForContext(text, maxChars) {
+  const cleaned = String(text || "")
+    .replace(/```[\s\S]*?```/g, "[code omitted]")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length <= maxChars) return cleaned;
+
+  const head = cleaned.slice(0, Math.floor(maxChars * 0.64)).trim();
+  const tail = cleaned.slice(-Math.floor(maxChars * 0.28)).trim();
+  return `${head} ... ${tail}`;
+}
+
+function trimToTokenBudget(text, tokenBudget) {
+  const charBudget = Math.max(400, tokenBudget * 4);
+  const value = String(text || "");
+  if (value.length <= charBudget) return value;
+  return `${value.slice(0, charBudget - 120).trim()}\n- [Earlier context truncated by auto compact.]`;
+}
+
+function estimateMessagesTokens(messages) {
+  return messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
+}
+
+function estimateMessageTokens(message) {
+  const content = String(message?.content || "");
+  const codeWeight = (content.match(/[{}()[\];=<>]/g) || []).length * 0.12;
+  return Math.ceil(content.length / 4 + codeWeight + 10);
+}
+
+function getContextWindowTokens(modelName = "") {
+  const lower = String(modelName || "").toLowerCase();
+  if (/128k|131k|200k|1m|llama3\.1|llama3\.2|qwen2\.5|qwen3|mistral-small|mixtral/.test(lower)) return 32768;
+  if (/32k|phi4|command-r|deepseek|qwq|yi|solar/.test(lower)) return 32768;
+  if (/16k|gemma3|gemma4|gemma|mistral|llama|phi3/.test(lower)) return 8192;
+  return DEFAULT_CONTEXT_WINDOW_TOKENS;
 }
 
 function updateAssistantMessage(message) {
@@ -1646,6 +1831,7 @@ function renderAll() {
   renderWebSearchToggle();
   renderDeepResearchToggle();
   renderSidebarState();
+  renderContextMeter();
   if (elements.graphDialog.open) {
     renderGraphDialog();
   }
@@ -1701,6 +1887,38 @@ function renderDeepResearchToggle() {
   elements.deepResearchButton.title = state.settings.deepResearchEnabled
     ? "Deep research on"
     : "Deep research";
+}
+
+function renderContextMeter() {
+  if (!elements.contextMeter) return;
+
+  const conversation = getCurrentConversation();
+  const draft = elements.promptInput?.value?.trim() || "";
+  const history = (conversation?.messages || [])
+    .filter((message) => (message.role === "user" || message.role === "assistant") && message.content)
+    .map((message) => ({ role: message.role, content: message.content }));
+  const plan = buildRequestMessages(history, draft || " ", null, null);
+  const stats = plan.stats;
+  const percent = stats.percent;
+
+  elements.contextRing.style.setProperty("--context-percent", `${percent}%`);
+  elements.contextLabel.textContent = `${percent}%`;
+  elements.contextMeter.classList.toggle("warning", percent >= 70);
+  elements.contextMeter.classList.toggle("danger", percent >= 88);
+  elements.contextMeter.classList.toggle("compacted", Boolean(stats.compacted));
+  elements.contextMeter.title = [
+    `Context estimate: ${formatTokenCount(stats.usedTokens)} / ${formatTokenCount(stats.windowTokens)} tokens`,
+    `Raw chat: ${formatTokenCount(stats.rawTokens)} tokens`,
+    stats.compacted ? "Auto compact: active for older messages" : "Auto compact: ready"
+  ].join("\n");
+}
+
+function formatTokenCount(value) {
+  const number = Number(value) || 0;
+  if (number >= 1000) {
+    return `${(number / 1000).toFixed(number >= 10000 ? 0 : 1)}k`;
+  }
+  return String(number);
 }
 
 function learnMemoriesFromPrompt(prompt) {
@@ -2015,6 +2233,7 @@ function selectModel(modelName) {
   closeModelMenu();
   renderConversations();
   renderModelPicker();
+  renderContextMeter();
 }
 
 function closeModelMenu() {
@@ -2111,6 +2330,8 @@ function branchConversationFromMessage(messageId) {
     parentId: sourceConversation.id,
     branchFromMessageId: sourceMessage.id,
     branchCreatedAt: now,
+    contextSummary: sourceConversation.contextSummary || "",
+    contextStats: null,
     messages: sourceConversation.messages.slice(0, messageIndex + 1).map(cloneMessageForBranch)
   };
 
@@ -2410,6 +2631,7 @@ function renderEmptyState() {
     button.addEventListener("click", () => {
       elements.promptInput.value = prompt;
       autoGrow(elements.promptInput);
+      renderContextMeter();
       elements.promptInput.focus();
     });
     grid.append(button);
@@ -2549,6 +2771,8 @@ function normalizeConversations() {
       parentId: typeof conversation.parentId === "string" && conversation.parentId ? conversation.parentId : null,
       branchFromMessageId: typeof conversation.branchFromMessageId === "string" && conversation.branchFromMessageId ? conversation.branchFromMessageId : null,
       branchCreatedAt: conversation.branchCreatedAt ? Number(conversation.branchCreatedAt) : null,
+      contextSummary: typeof conversation.contextSummary === "string" ? conversation.contextSummary : "",
+      contextStats: isPlainObject(conversation.contextStats) ? conversation.contextStats : null,
       messages: Array.isArray(conversation.messages) ? conversation.messages : []
     }));
 }
@@ -2619,6 +2843,8 @@ function createConversation() {
     parentId: null,
     branchFromMessageId: null,
     branchCreatedAt: null,
+    contextSummary: "",
+    contextStats: null,
     messages: []
   };
   state.conversations.push(conversation);

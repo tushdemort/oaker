@@ -126,6 +126,8 @@ function initDatabase() {
   ensureConversationColumn("parent_id", "TEXT");
   ensureConversationColumn("branch_from_message_id", "TEXT");
   ensureConversationColumn("branch_created_at", "INTEGER");
+  ensureConversationColumn("context_summary", "TEXT");
+  ensureConversationColumn("context_stats_json", "TEXT");
 }
 
 function ensureConversationColumn(name, definition) {
@@ -138,7 +140,7 @@ function loadAppState() {
   const settingsRow = db.prepare("SELECT json FROM app_settings WHERE id = 1").get();
   const settingsPayload = settingsRow ? safeParseJson(settingsRow.json) : {};
   const rows = db
-    .prepare("SELECT id, title, model, created_at, updated_at, parent_id, branch_from_message_id, branch_created_at, messages_json FROM conversations ORDER BY updated_at DESC")
+    .prepare("SELECT id, title, model, created_at, updated_at, parent_id, branch_from_message_id, branch_created_at, context_summary, context_stats_json, messages_json FROM conversations ORDER BY updated_at DESC")
     .all();
 
   return {
@@ -153,6 +155,8 @@ function loadAppState() {
       parentId: row.parent_id || null,
       branchFromMessageId: row.branch_from_message_id || null,
       branchCreatedAt: row.branch_created_at ? Number(row.branch_created_at) : null,
+      contextSummary: row.context_summary || "",
+      contextStats: safeParseJson(row.context_stats_json) || null,
       messages: safeParseJson(row.messages_json) || []
     }))
   };
@@ -179,8 +183,8 @@ async function saveAppState(req, res) {
   `);
   const deleteConversations = db.prepare("DELETE FROM conversations");
   const insertConversation = db.prepare(`
-    INSERT INTO conversations (id, title, model, created_at, updated_at, parent_id, branch_from_message_id, branch_created_at, messages_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO conversations (id, title, model, created_at, updated_at, parent_id, branch_from_message_id, branch_created_at, context_summary, context_stats_json, messages_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   try {
@@ -199,6 +203,8 @@ async function saveAppState(req, res) {
         conversation.parentId ? String(conversation.parentId) : null,
         conversation.branchFromMessageId ? String(conversation.branchFromMessageId) : null,
         conversation.branchCreatedAt ? Number(conversation.branchCreatedAt) : null,
+        typeof conversation.contextSummary === "string" ? conversation.contextSummary : "",
+        JSON.stringify(isPlainObject(conversation.contextStats) ? conversation.contextStats : null),
         JSON.stringify(Array.isArray(conversation.messages) ? conversation.messages : [])
       );
     }

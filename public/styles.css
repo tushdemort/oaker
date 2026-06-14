@@ -1529,6 +1529,51 @@ h2 {
   flex: 0 0 auto;
 }
 
+.context-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 8px;
+  color: var(--muted);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.context-ring {
+  --context-percent: 0%;
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  background:
+    radial-gradient(circle at center, var(--panel) 50%, transparent 52%),
+    conic-gradient(var(--sage-dark) var(--context-percent), rgba(52, 79, 67, 0.18) 0);
+  border: 1px solid rgba(52, 79, 67, 0.14);
+  border-radius: 999px;
+}
+
+.context-meter.warning .context-ring {
+  background:
+    radial-gradient(circle at center, var(--panel) 50%, transparent 52%),
+    conic-gradient(#b77b34 var(--context-percent), rgba(183, 123, 52, 0.18) 0);
+}
+
+.context-meter.danger .context-ring {
+  background:
+    radial-gradient(circle at center, var(--panel) 50%, transparent 52%),
+    conic-gradient(var(--error) var(--context-percent), rgba(159, 53, 44, 0.16) 0);
+}
+
+.context-meter.compacted .context-label::after {
+  content: " compacted";
+  color: var(--subtle);
+  font-weight: 650;
+}
+
 .model-picker {
   position: relative;
   min-width: 0;
@@ -1853,6 +1898,10 @@ h2 {
 
   .composer-tools {
     justify-content: flex-end;
+  }
+
+  .context-label {
+    display: none;
   }
 
   .model-trigger {
